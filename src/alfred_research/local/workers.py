@@ -32,7 +32,7 @@ def selected_evidence(question, sources):
 
 
 def plan(question, sources, provider):
-    specialty, supporting = classify(question, 'article')
+    specialty, supporting = classify(question, sources[0].get('kind', 'article') if sources else 'article')
     return {'director': 'local-research-director', 'mode': provider, 'specialty': specialty,
             'supporting_specialties': list(supporting),
             'assignments': [{'worker': 'research-worker-' + s['source_id'], 'source_id': s['source_id'],

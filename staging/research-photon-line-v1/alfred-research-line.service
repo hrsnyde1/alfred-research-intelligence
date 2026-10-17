@@ -1,0 +1,37 @@
+# PROPOSED ONLY. Research worker for the dedicated Research Photon line.
+# Same service account as the connector (reads its pending records, writes its outbox).
+# The Memory token is provisioned by the owner; Research tooling never sees it.
+[Unit]
+Description=Alfred Research line worker
+After=network-online.target alfred-research-photon.service alfred-memory-v1.service
+Wants=network-online.target
+StartLimitIntervalSec=3600
+StartLimitBurst=5
+[Service]
+Type=simple
+User=alfredresearchphoton
+Group=alfredresearchphoton
+StateDirectory=alfred-research-line
+StateDirectoryMode=0700
+UMask=0077
+WorkingDirectory=/opt/alfred-research-line/v1
+# Phase B (Memory publishing): uncomment after the Memory token file exists; systemd refuses to start if it is missing.
+#LoadCredential=memory-token:/etc/alfred-research-line/credentials/memory-token
+ExecStart=/usr/bin/python3 -B /opt/alfred-research-line/v1/scripts/research_line.py run /etc/alfred-research-line/config.json
+Restart=on-failure
+RestartSec=30
+TimeoutStopSec=10
+KillMode=control-group
+MemoryMax=2G
+CPUQuota=100%
+TasksMax=128
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectProc=invisible
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ReadWritePaths=/var/lib/alfredresearch-photon /var/lib/alfred-research-line
+SyslogIdentifier=alfred-research-line
+[Install]
+WantedBy=multi-user.target

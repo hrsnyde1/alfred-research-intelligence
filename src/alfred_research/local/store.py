@@ -94,6 +94,19 @@ class JobStore:
             result['events'] = [dict(r) for r in db.execute('SELECT status,observed_at,detail FROM events WHERE job_id=? ORDER BY sequence', (job_id,))]
             return result
 
+    def by_request_key(self, request_key):
+        with self.connect() as db:
+            row = db.execute('SELECT id FROM jobs WHERE request_key=?', (request_key,)).fetchone()
+        return row[0] if row else None
+
+    def find_recent(self, request, since):
+        """Newest job with an identical request created at or after ``since`` (UTC ISO)."""
+        body = json.dumps(request, sort_keys=True, ensure_ascii=False)
+        with self.connect() as db:
+            row = db.execute('SELECT id FROM jobs WHERE request=? AND created_at>=? ORDER BY created_at DESC,id DESC LIMIT 1',
+                             (body, since)).fetchone()
+        return row[0] if row else None
+
     def list(self):
         with self.connect() as db:
             db.row_factory = sqlite3.Row
