@@ -30,11 +30,13 @@ def short(text, limit):
 
 class ResearchDesk:
     def __init__(self, working_directory, *, deliver=None, provider='auto', runner='thread', max_concurrent=2,
-                 clock=None, publisher=None):
+                 clock=None, publisher=None, publish_extractive=False):
         if runner not in ('thread', 'inline'):
             raise ValueError('runner must be thread or inline')
         self.engine = ResearchEngine(working_directory)
         self.deliver, self.provider, self.runner, self.publisher = deliver, provider, runner, publisher
+        # Owner decision 2026-10-16: no-model (extractive) quotes are not auto-published to Memory.
+        self.publish_extractive = publish_extractive is True
         self.slots = threading.BoundedSemaphore(max_concurrent)
         self.clock = clock or (lambda: datetime.now(timezone.utc))
 
@@ -89,6 +91,11 @@ class ResearchDesk:
         """Send verified findings to Alfred Memory once; the receipt is stored with the job."""
         if self.publisher is None or PUBLICATION_ARTIFACT in job['artifacts'] or 'memory-candidate' not in job['artifacts']:
             return job
+        if job['artifacts'].get('plan', {}).get('mode') != 'codex' and not self.publish_extractive:
+            record = {'status': 'skipped', 'receipts': [],
+                      'detail': 'findings came from the no-model extractive worker; configure a model provider to publish'}
+            self.engine.store.put(job['id'], PUBLICATION_ARTIFACT, record)
+            return self.engine.store.get(job['id'])
         try:
             record = self.publisher.publish(job['id'], job['artifacts']['memory-candidate'])
         except Exception as error:
@@ -170,6 +177,8 @@ def memory_line(job):
             return 'Memory: ' + str(approved) + ' finding(s) saved to Alfred\'s Memory as approved; Alfred can now use them.'
         if publication['status'] == 'pending_review':
             return 'Memory: ' + str(approved) + ' approved, ' + str(pending) + ' waiting for review in Alfred\'s Memory.'
+        if publication['status'] == 'skipped':
+            return 'Memory: not published (' + short(publication.get('detail', ''), 120) + '); kept as a local candidate.'
         return 'Memory: not saved (' + short(publication.get('detail', 'error'), 120) + '); findings kept as a local candidate.'
     if candidate:
         return 'Memory: candidate kept locally, not published to Alfred\'s Memory.'

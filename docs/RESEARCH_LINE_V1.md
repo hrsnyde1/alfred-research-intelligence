@@ -49,10 +49,10 @@ This was not tested with the real Photon SDK, the real line, or the live Memory 
 
 ## Decisions and blockers for Hayden
 
-1. **Research quality before auto-approving into Memory.** The service account has no model provider, so the template uses `provider: extractive`, which saves keyword-ranked quotations, not synthesized findings. With auto-approval these go straight into Alfred's Memory. Choose one:
-   - give the service account a model provider: a Codex CLI login, or another provider credential that you provision;
-   - accept extractive quotes for V1;
-   - keep Memory publishing off (`memory.enabled: false`) until a provider is configured.
+1. **Model provider (decided 2026-10-16: Memory publishing stays OFF until a real provider is configured; provider choice pending).**
+   - The config template ships with `memory.enabled: false`. Findings stay as local candidates, and replies say "not published to Alfred's Memory".
+   - Even with Memory switched on, the desk publishes only jobs whose workers used a model provider (`plan.mode == "codex"`). Extractive-mode jobs are recorded as `skipped`, which also covers `provider: auto` falling back to extractive. Only an explicit `memory.allow_extractive: true` overrides this.
+   - Hayden will choose the provider next. Options: a Codex CLI login for the service account, or another provider credential that he provisions.
 2. **Memory kind.** Either `development_lesson` (works today, shows under "Lessons" in Obsidian) or install the `research_finding` patch (a Memory release).
 3. **Line mode is unverified** (`RESEARCH_PHOTON_ACCOUNT_CAPABILITY_DECISION.md`). The connector refuses the shared line. Whether the project issues a dedicated line for +1 415 225-0168 is only knowable by authenticating, which is your step.
 

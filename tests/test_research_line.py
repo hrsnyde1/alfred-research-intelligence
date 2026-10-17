@@ -91,7 +91,7 @@ class LineTests(unittest.TestCase):
                   'outbox_dir': str(self.ledger / 'outbox'), 'binding': dict(BINDING), 'provider': 'extractive'}
         if memory_kind:
             config['memory'] = {'enabled': True, 'url': self.memory.url, 'token_file': str(self.token),
-                                'task_id': 'research-line', 'kind': memory_kind}
+                                'task_id': 'research-line', 'kind': memory_kind, 'allow_extractive': True}
         config.update(extra)
         return config
 
@@ -168,6 +168,25 @@ class LineTests(unittest.TestCase):
         final = self.outbox()[-1]['text']
         self.assertIn('Memory: not saved (Memory refused the record (HTTP 400', final)
         self.assertIn('Research complete', final)
+
+    def test_extractive_findings_are_not_published_by_default(self):
+        self.memory = FakeMemory()
+        config = self.config('development_lesson')
+        del config['memory']['allow_extractive']
+        line = ResearchLine(config, runner='inline')
+        self.inbound('https://example.org/retries')
+        with patch('alfred_research.local.sources.http_get', Responses(ROUTES)):
+            line.poll_once()
+        self.assertEqual(self.memory.records, [])
+        self.assertIn('Memory: not published (findings came from the no-model extractive worker', self.outbox()[-1]['text'])
+        job = line.engine.store.get(line.engine.store.list()[0]['id'])
+        self.assertEqual(job['artifacts']['memory-publication']['status'], 'skipped')
+
+    def test_template_ships_with_memory_publishing_off(self):
+        template = json.loads((Path(__file__).resolve().parents[1] / 'staging' / 'research-photon-line-v1' /
+                               'line-config.template.json').read_text())
+        self.assertIs(template['memory']['enabled'], False)
+        self.assertIs(template['enabled'], False)
 
     def test_binding_mismatch_is_ignored(self):
         line = self.line()

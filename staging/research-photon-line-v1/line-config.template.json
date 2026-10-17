@@ -7,7 +7,7 @@
   "provider": "extractive",
   "poll_seconds": 3,
   "memory": {
-    "enabled": true,
+    "enabled": false,
     "url": "http://127.0.0.1:<MEMORY_PORT>/v1/memory",
     "token_file": "${CREDENTIALS_DIRECTORY}/memory-token",
     "task_id": "research-line",

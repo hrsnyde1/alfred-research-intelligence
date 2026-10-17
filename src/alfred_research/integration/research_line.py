@@ -81,7 +81,7 @@ class ResearchLine(ResearchDesk):
             token_file = memory['token_file'].replace('${CREDENTIALS_DIRECTORY}', os.environ.get('CREDENTIALS_DIRECTORY', ''))
             publisher = MemoryServicePublisher(memory['url'], token_file, memory['task_id'], memory['kind'])
         super().__init__(data / 'research', deliver=self.send, provider=config.get('provider', 'auto'),
-                         publisher=publisher, **options)
+                         publisher=publisher, publish_extractive=memory.get('allow_extractive') is True, **options)
 
     # ------------------------------------------------------------ transport
 
