@@ -70,7 +70,8 @@ class FakeMemory:
         self.server.server_close()
 
 
-class LineTests(unittest.TestCase):
+class LineHarness(unittest.TestCase):
+    """Line fixtures without tests, so other modules can reuse them."""
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
@@ -118,6 +119,8 @@ class LineTests(unittest.TestCase):
         items = [json.loads(p.read_text()) for p in (self.ledger / 'outbox').glob('*.json')]
         return sorted(items, key=lambda r: r['sequence'])
 
+
+class LineTests(LineHarness):
     def test_link_is_acknowledged_researched_and_replied_in_order(self):
         line = self.line()
         key = self.inbound('https://example.org/retries')
