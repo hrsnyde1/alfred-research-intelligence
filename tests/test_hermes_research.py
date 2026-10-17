@@ -108,7 +108,7 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual((route['chat_id'], route['message_id'], route['environment']), ('space-owner', 'm1', 'personal'))
         self.assertIn('Research complete', text)
         self.assertIn('[article:html-line', text)
-        self.assertIn('not promoted', text)
+        self.assertIn('not published to Alfred\'s Memory', text)
         job = self.adapter.engine.store.get(row['id'])
         self.assertEqual(job['artifacts']['hermes-delivery']['status'], 'handed_to_host')
 

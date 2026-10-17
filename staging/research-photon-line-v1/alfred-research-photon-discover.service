@@ -1,0 +1,31 @@
+# PROPOSED ONLY. One-time Research line binding discovery (no sends, 2-minute window).
+# Same account, credentials and SDK mounts as alfred-research-photon.service.
+[Unit]
+Description=Research Photon line one-time binding discovery
+After=network-online.target
+Wants=network-online.target
+Conflicts=alfred-research-photon.service
+[Service]
+Type=oneshot
+User=alfredresearchphoton
+Group=alfredresearchphoton
+StateDirectory=alfredresearch-photon
+StateDirectoryMode=0700
+UMask=0077
+WorkingDirectory=/opt/alfred-research-photon/v1
+LoadCredential=research-project-id:/etc/alfred-research-photon/credentials/research-project-id
+LoadCredential=research-project-secret:/etc/alfred-research-photon/credentials/research-project-secret
+ExecStart=/opt/alfred-research-photon/runtime/bin/node /opt/alfred-research-photon/v1/main.mjs discover /etc/alfred-research-photon/discovery-policy.json
+TimeoutStartSec=150
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=tmpfs
+PrivateTmp=yes
+ProtectProc=invisible
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+BindReadOnlyPaths=/home/alfred/.hermes/tools/node-26.7.0-linux-x64:/opt/alfred-research-photon/runtime
+BindReadOnlyPaths=/home/alfred/.hermes/hermes-agent/plugins/platforms/photon/sidecar/node_modules:/opt/alfred-research-photon/v1/node_modules
+ReadWritePaths=/var/lib/alfredresearch-photon
+SyslogIdentifier=alfred-research-photon-discover
+StandardOutput=journal
+StandardError=null
