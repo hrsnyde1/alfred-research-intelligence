@@ -167,11 +167,12 @@ class ResearchEngine:
             report = None
             if claude:
                 try:
-                    synthesis = synthesize(claude, request, sources, claims, investigations, verification)
+                    stored = self.store.get(job_id)['artifacts'].get('corroboration')
+                    synthesis = synthesize(claude, request, sources, claims, investigations, verification, stored)
                     self.store.put(job_id, 'synthesis', synthesis)
                     self.store.put(job_id, 'telegram-summary', {'text': synthesis['telegram_summary'], 'chars': len(synthesis['telegram_summary'])})
                     report = render_intelligence(job_id, request, sources, claims, investigations, verification, synthesis,
-                                                 failures, discovery, claude.settings)
+                                                 failures, discovery, claude.settings, stored)
                 except Exception as error:
                     # Findings are already verified; fall back to the deterministic report rather than lose them.
                     limitations.append('Model synthesis failed (' + type(error).__name__ + ': ' + str(error)[:200] +

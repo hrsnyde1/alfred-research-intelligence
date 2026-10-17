@@ -4,10 +4,12 @@ Roles are prompt profiles inside one worker process, not services. Investigation
 run one after another. Source text reaches the model only as escaped data inside
 delimiters; every finding must cite evidence IDs that exist in the acquired source.
 """
+from itertools import zip_longest
 import html
 import json
 import re
 
+from .verify import VerificationResult, claim_text, terms
 from .workers import selected_evidence
 
 ROLES = {
@@ -218,12 +220,45 @@ def enforce_citations(findings, source, investigation):
 
 CLAIM_REF = re.compile(r'\[(C\d+)\]')
 
+# Wording for each corroboration status. Only 'corroborated' says independent support exists.
+CORROBORATION_LABELS = {
+    'corroborated': 'CORROBORATED by independent source(s)',
+    'original_source_only': 'ORIGINAL SOURCE ONLY — not independently corroborated',
+    'disputed': 'DISPUTED — independent sources both support and contradict',
+    'contradicted': 'CONTRADICTED by discovered source(s)',
+    'unverified': 'UNVERIFIED — no independent check completed',
+    'not_assessable': 'NOT ASSESSABLE for corroboration',
+    'not_checked': 'NOT CHECKED — no corroboration result',
+}
+CONFLICT_PREFIX = {'contradicted': '(Contradicted by other sources) ', 'disputed': '(Disputed by other sources) '}
 
-def synthesize(provider, request, sources, claims, investigations, verification):
+
+def load_corroboration(value):
+    """The job's 'corroboration' artifact as a VerificationResult, or None when absent. Malformed raises."""
+    if value is None or isinstance(value, VerificationResult):
+        return value
+    return VerificationResult.from_dict(value)
+
+
+def corroboration_status(corroboration):
+    rows = corroboration.by_claim() if corroboration else {}
+    return {claim_id: row.status for claim_id, row in rows.items()}
+
+
+def synthesize(provider, request, sources, claims, investigations, verification, corroboration=None):
+    corroboration = load_corroboration(corroboration)
+    rows = corroboration.by_claim() if corroboration else {}
     supported = {a['claim_id']: a['supported'] for a in verification['assessments']}
-    packet = [{'claim_id': c['claim_id'], 'status': 'SOURCE-SUPPORTED' if supported.get(c['claim_id']) else 'NOT VERIFIED',
-               'kind': c['kind'], 'confidence': c.get('confidence'), 'role': c.get('role'), 'source_id': c['source_id'],
-               'statement': c['statement'], 'quote': c['quote']} for c in claims]
+    packet = []
+    for c in claims:
+        row = rows.get(c['claim_id'])
+        packet.append({'claim_id': c['claim_id'], 'status': 'SOURCE-SUPPORTED' if supported.get(c['claim_id']) else 'NOT VERIFIED',
+                       'corroboration': row.status if row else 'not_checked',
+                       'corroboration_note': row.rationale if row else 'No corroboration result for this finding.',
+                       'independent_supporting_passages': len(row.supporting) if row else 0,
+                       'contradicting_passages': len(row.contradicting) if row else 0,
+                       'kind': c['kind'], 'confidence': c.get('confidence'), 'role': c.get('role'), 'source_id': c['source_id'],
+                       'statement': c['statement'], 'quote': c['quote']})
     context = [{'investigation_id': i['investigation_id'], 'role': i['role'], 'question': i['question'],
                 'open_questions': i['open_questions'], 'limitations': i['limitations'],
                 'recommendations': i['recommendations'], 'legal_notice': i.get('legal_notice')} for i in investigations]
@@ -235,18 +270,50 @@ def synthesize(provider, request, sources, claims, investigations, verification)
               'source support is not independent corroboration. Knowledge candidates may only name SOURCE-SUPPORTED source_statement '
               'findings; they are candidates for Alfred Memory, not accepted knowledge. If any legal_regulatory work is present, '
               'say it is not legal advice and give its jurisdiction and date. The telegram_summary is plain text of at most 600 '
-              'characters for a phone chat: the key takeaway, the number of supported findings, and nothing unverified stated as fact.\n\n' +
+              'characters for a phone chat: the key takeaway, the number of supported findings, and nothing unverified stated as fact.\n'
+              'Each finding also carries a corroboration status from a separate fact-verification stage that searched other sources: '
+              'corroborated, original_source_only, disputed, contradicted, unverified, not_assessable, or not_checked. Only findings '
+              'marked corroborated may be called independently corroborated; describe original_source_only as resting on its original '
+              'source alone, and unverified, not_assessable and not_checked as not independently checked. Findings marked contradicted '
+              'or disputed must be described as contradicted or disputed, must never be stated as fact (including in the '
+              'telegram_summary), and must not be knowledge candidates. The verification_assessment should report these statuses.\n\n' +
               DATA_RULES)
     user = (owner_block(request['objective']) + '\n<source_metadata>' + escape(json.dumps(meta, ensure_ascii=False)) +
             '</source_metadata>\n<source_document>\n<findings>' + escape(json.dumps(packet, ensure_ascii=False)) +
             '</findings>\n<investigations>' + escape(json.dumps(context, ensure_ascii=False)) + '</investigations>\n</source_document>')
     result = provider.call_json(model=provider.settings.synthesis_model, effort=provider.settings.synthesis_effort,
                                 system=system, user=user, schema=SYNTHESIS_SCHEMA, max_tokens=16000)
-    return validate_synthesis(result, claims, supported)
+    return validate_synthesis(result, claims, supported, corroboration)
 
 
-def validate_synthesis(result, claims, supported):
+def without_conflicts(summary, claims, statuses):
+    """Drop summary sentences that cite or restate a contradicted/disputed claim, and say so."""
+    conflicts = [c for c in claims if statuses.get(c['claim_id']) in CONFLICT_PREFIX]
+    if not conflicts:
+        return summary
+
+    def restates(sentence):
+        if {c['claim_id'] for c in conflicts} & set(CLAIM_REF.findall(sentence)):
+            return True
+        said = terms(sentence)
+        for claim in conflicts:
+            wanted = terms(claim_text(claim))
+            if len(wanted & said) >= 3 and len(wanted & said) / len(wanted) >= 0.6:
+                return True
+        return False
+
+    note = (str(len(conflicts)) + ' finding(s) contradicted or disputed by other sources (' +
+            ', '.join(c['claim_id'] for c in conflicts) + '); not stated as fact.')
+    kept = ' '.join(s for s in re.split(r'(?<=[.!?])\s+', summary) if s and not restates(s))
+    room = 600 - len(note) - 1
+    if len(kept) > room:
+        kept = kept[:max(0, room - 1)].rstrip() + '…'
+    return (kept + ' ' + note).strip()
+
+
+def validate_synthesis(result, claims, supported, corroboration=None):
     ids = {c['claim_id']: c for c in claims}
+    statuses = corroboration_status(load_corroboration(corroboration))
     removed = []
 
     def clean(value, limit):
@@ -267,18 +334,29 @@ def validate_synthesis(result, claims, supported):
             removed.append('uncited important finding')
             continue
         verified = any(supported.get(i) for i in refs)
-        findings.append({'point': point if verified else '(Unverified) ' + point, 'claim_ids': refs, 'verified': verified})
+        conflict = next((statuses[i] for i in refs if statuses.get(i) == 'contradicted'), None) or \
+            next((statuses[i] for i in refs if statuses.get(i) == 'disputed'), None)
+        if conflict:
+            point = CONFLICT_PREFIX[conflict] + point
+        elif not verified:
+            point = '(Unverified) ' + point
+        findings.append({'point': point, 'claim_ids': refs, 'verified': verified,
+                         'corroboration': [statuses.get(i, 'not_checked') for i in refs]})
     candidates = []
     for row in (result.get('knowledge_candidates') if isinstance(result.get('knowledge_candidates'), list) else [])[:10]:
         claim = ids.get(row.get('claim_id')) if isinstance(row, dict) else None
-        if claim and supported.get(claim['claim_id']) and claim['kind'] == 'source_statement':
-            candidates.append({'claim_id': claim['claim_id'], 'note': clean(row.get('note'), 500)})
+        if claim and statuses.get(claim['claim_id']) in CONFLICT_PREFIX:
+            removed.append('contradicted or disputed knowledge candidate')
+        elif claim and supported.get(claim['claim_id']) and claim['kind'] == 'source_statement':
+            candidates.append({'claim_id': claim['claim_id'], 'note': clean(row.get('note'), 500),
+                               'corroboration': statuses.get(claim['claim_id'], 'not_checked')})
         else:
             removed.append('ineligible knowledge candidate')
     summary = clean(result.get('telegram_summary'), 4000)
     summary = ' '.join(summary.split())
     if len(summary) > 600:
         summary = summary[:599].rstrip() + '…'
+    summary = without_conflicts(summary, claims, statuses)
     return {'executive_summary': clean(result.get('executive_summary'), 4000),
             'source_overview': clean(result.get('source_overview'), 4000),
             'important_findings': findings,
@@ -293,7 +371,24 @@ def validate_synthesis(result, claims, supported):
 
 # ------------------------------------------------------------------ report
 
-def render_intelligence(job_id, request, sources, claims, investigations, verification, synthesis, failures, discovery, settings):
+def cell(citations):
+    """Citations for one table cell: passage and URL only, pipe- and newline-safe."""
+    return '<br>'.join('"' + c.passage.replace('|', '\\|').replace('\n', ' ') + '" — <' + c.url + '>' for c in citations) or '—'
+
+
+def side_by_side(row):
+    """Supporting (independent) and contradicting passages in two columns, one citation per row."""
+    lines = ['| Supporting (independent) | Contradicting |', '|---|---|']
+    for support, contra in zip_longest(row.supporting, row.contradicting):
+        lines.append('| ' + cell([support] if support else []) + ' | ' + cell([contra] if contra else []) + ' |')
+    return lines
+
+
+def render_intelligence(job_id, request, sources, claims, investigations, verification, synthesis, failures, discovery, settings,
+                        corroboration=None):
+    corroboration = load_corroboration(corroboration)
+    rows = corroboration.by_claim() if corroboration else {}
+    statuses = corroboration_status(corroboration)
     supported = {a['claim_id']: a for a in verification['assessments']}
     refs = {e['evidence_id']: (s, e) for s in sources for e in s['evidence']}
     legal = [i['legal_notice'] for i in investigations if i.get('legal_notice')]
@@ -326,6 +421,16 @@ def render_intelligence(job_id, request, sources, claims, investigations, verifi
         if claim.get('citation_notes'):
             lines += ['Citation check: ' + '; '.join(claim['citation_notes']) + '.', '']
         lines += ['Verification: ' + check['reason'], '']
+        row = rows.get(claim['claim_id'])
+        lines += ['Corroboration: **' + CORROBORATION_LABELS[row.status if row else 'not_checked'] + '**' +
+                  ('. ' + row.rationale if row and row.rationale else '.'), '']
+        if row and (row.supporting or row.contradicting):
+            lines += side_by_side(row) + ['']
+        if row and row.non_independent:
+            lines += ['Not counted as corroboration (not independent of the original source):', '']
+            lines += ['- "' + c.passage.replace('\n', ' ') + '" — <' + c.url + '>' for c in row.non_independent] + ['']
+        if row and row.unreachable:
+            lines += ['Unreachable candidates: ' + '; '.join('<' + u['url'] + '>' for u in row.unreachable) + '.', '']
     if not claims:
         lines += ['No cited findings.', '']
     total_rejected = sum(len(i['rejected_findings']) for i in investigations)
@@ -333,8 +438,26 @@ def render_intelligence(job_id, request, sources, claims, investigations, verifi
               '- ' + str(sum(1 for a in supported.values() if a['supported'])) + ' of ' + str(len(claims)) +
               ' findings source-supported by exact quotation against the pinned source.',
               '- ' + str(total_rejected) + ' model finding(s) rejected for missing or nonexistent citations; ' +
-              str(sum(1 for c in claims if c.get('citation_status') == 'downgraded')) + ' downgraded (quote not verbatim).',
-              '- No independent corroboration from other sources was performed.', '']
+              str(sum(1 for c in claims if c.get('citation_status') == 'downgraded')) + ' downgraded (quote not verbatim).']
+    if corroboration:
+        counts = corroboration.counts()
+        lines += ['- Independent corroboration (' + corroboration.method + '; providers: ' +
+                  (', '.join(corroboration.providers) or 'none') + '): ' +
+                  (', '.join(str(n) + ' ' + k for k, n in counts.items() if n) or 'no findings checked') + '.',
+                  '- Only CORROBORATED findings have independent support; original_source_only, unverified and not_assessable '
+                  'findings rest on their original source at most.']
+        if corroboration.conflicts():
+            lines.append('- Contradicted or disputed: ' + ', '.join(corroboration.conflicts()) +
+                         '. These are not stated as fact and are excluded from knowledge candidates.')
+        lines.append('')
+        checked = [c['claim_id'] for c in claims if c['claim_id'] in rows and (rows[c['claim_id']].supporting or rows[c['claim_id']].contradicting)]
+        if checked:
+            lines += ['| Finding | Corroboration | Supporting (independent) | Contradicting |', '|---|---|---|---|']
+            lines += ['| ' + i + ' | ' + rows[i].status + ' | ' + cell(rows[i].supporting) + ' | ' + cell(rows[i].contradicting) + ' |'
+                      for i in checked]
+            lines.append('')
+    else:
+        lines += ['- No independent corroboration from other sources was performed.', '']
     for title, key in (('Implications', 'implications'), ('Opportunities', 'opportunities'), ('Recommendations', 'recommendations')):
         lines += ['## ' + title, '']
         if key == 'recommendations' and verification.get('recommendations_supported') is not True:
@@ -351,12 +474,19 @@ def render_intelligence(job_id, request, sources, claims, investigations, verifi
         limits.append('Synthesis output removed: ' + ', '.join(dict.fromkeys(synthesis['removed']))[:300] + '.')
     if discovery:
         limits.append(discovery.get('limitation', 'Public discovery attempted.'))
+    if corroboration:
+        limits += list(corroboration.limitations)
+        limits += ['Corroboration search failed (' + str(e.get('provider', 'search')) + '): ' + str(e.get('error', ''))[:200]
+                   for e in corroboration.search_errors if isinstance(e, dict)]
     limits += ['Acquisition failed for ' + f['locator'] + ': ' + f['error'] for f in failures]
     lines += ['- ' + x for x in dict.fromkeys(limits)]
     lines += ['', '## Knowledge Candidates', '',
               'Candidates only. Alfred Memory is authoritative; nothing here is promoted unless Memory confirms it.', '']
-    lines += ['- [' + c['claim_id'] + '] ' + (c['note'] or 'source-supported finding') for c in synthesis['knowledge_candidates']] or \
-        ['None.']
+    candidates = [c for c in synthesis['knowledge_candidates'] if statuses.get(c['claim_id']) not in CONFLICT_PREFIX]
+    lines += ['- [' + c['claim_id'] + '] ' + (c['note'] or 'source-supported finding') +
+              ' (corroboration: ' + statuses.get(c['claim_id'], 'not_checked') + ')' for c in candidates] or ['None.']
+    if corroboration and corroboration.conflicts():
+        lines += ['', 'Excluded as contradicted or disputed: ' + ', '.join(corroboration.conflicts()) + '.']
     lines += ['', '## Sources and acquisition', '']
     for source in sources:
         lines.append('- [' + source['source_id'] + '](' + source['locator'] + '): acquired ' + source['acquired_at'] +

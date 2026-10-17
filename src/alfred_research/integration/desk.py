@@ -189,6 +189,15 @@ def memory_line(job):
     return 'Memory: nothing to save (no source-supported findings).'
 
 
+def corroboration_line(artifacts):
+    statuses = [c.get('status') for c in (artifacts.get('corroboration') or {}).get('claims', [])]
+    if not statuses:
+        return 'not independently corroborated.'
+    conflicts = sum(s in ('contradicted', 'disputed') for s in statuses)
+    return (str(statuses.count('corroborated')) + ' independently corroborated' +
+            (', ' + str(conflicts) + ' contradicted or disputed' if conflicts else '') + '.')
+
+
 def final_message(job):
     """Message-friendly summary; the full cited report stays with the job."""
     artifacts, status = job['artifacts'], job['status']
@@ -208,7 +217,7 @@ def final_message(job):
     lines = [header + ': ' + objective]
     brief = (artifacts.get('telegram-summary') or {}).get('text')
     if brief:  # model synthesis summary (<= 600 chars); citations and verification live in the full report
-        lines += [brief, str(len(supported)) + ' of ' + str(len(claims)) + ' findings source-supported (not independently corroborated).',
+        lines += [brief, str(len(supported)) + ' of ' + str(len(claims)) + ' findings source-supported; ' + corroboration_line(artifacts),
                   memory_line(job), 'Full report: research status ' + job['id']]
         return '\n'.join(lines)
     for source in sources:

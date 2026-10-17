@@ -56,6 +56,8 @@ Citation(discovery_id, url, publisher, retrieved_at, role, independence_group,
     location, sha256, note)
 ```
 
+Claude synthesis (`director.synthesize` / `render_intelligence`) consumes this artifact: each finding's status goes to the synthesis prompt; Evidence and Citations and Verification Assessment show supporting and contradicting citations (URL and passage only) side by side; `conflicts()` claims are labelled in Important Findings and removed from Knowledge Candidates and from the Telegram summary's stated facts (a note names them instead). Without the artifact, the report says no corroboration was performed.
+
 Rendering guidance: show `status` per finding and cite only `Citation.url` and `Citation.passage`. Show contradictions next to any support. List `unreachable` candidates and `limitations`. Never describe `original_source_only`, `unverified` or `non_independent` repetitions as corroboration. Memory publication should exclude claims in `conflicts()`. The current publisher reads only the source-support assessments, so that filter is a follow-up.
 
 ## Configuration
