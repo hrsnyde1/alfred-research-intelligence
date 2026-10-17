@@ -86,7 +86,8 @@ class ResearchEngine:
                     self.store.put(job_id, 'source-' + str(index), source)
                 except Exception as error:
                     failures.append({'locator': locator, 'error': type(error).__name__ + ': ' + str(error)[:500],
-                                     'unsupported': isinstance(error, UnsupportedSource)})
+                                     'unsupported': isinstance(error, UnsupportedSource),
+                                     'metadata': getattr(error, 'metadata', {})})
             self.store.put(job_id, 'acquisition-failures', failures)
             if not sources:
                 status = 'unsupported' if failures and all(f['unsupported'] for f in failures) else 'failed'
@@ -142,6 +143,10 @@ class ResearchEngine:
         return self.store.get(job_id)
 
 
+DISPLAYED_METADATA = ('title', 'author', 'channel', 'published_at', 'created_at', 'revision', 'pages',
+                      'duration_seconds', 'captions', 'files_read', 'files_total', 'license')
+
+
 def render(job_id, request, sources, claims, recommendations, limitations, failures, verification, provider, discovery):
     supported = {a['claim_id']: a for a in verification['assessments']}
     refs = {e['evidence_id']: (s, e) for s in sources for e in s['evidence']}
@@ -171,13 +176,20 @@ def render(job_id, request, sources, claims, recommendations, limitations, failu
     for source in sources:
         lines += ['- [' + source['source_id'] + '](' + source['locator'] + '): acquired ' + source['acquired_at'] +
                   '; SHA-256 `' + source['sha256'] + '`; ' + str(source['bytes']) + ' bytes; origin ' + source['provenance']['origin'] + '.']
+        if source.get('handler'):
+            details = ['handler ' + source['handler'], 'evidence basis ' + source['content_basis']]
+            details += [key + ' ' + str(source['metadata'][key]) for key in DISPLAYED_METADATA if source['metadata'].get(key)]
+            lines += ['  ' + '; '.join(details) + '.']
     lines += ['', '## Limitations and unresolved work', '']
     all_limits = list(limitations) + [x for s in sources for x in s['limitations']]
     all_limits += ['At most four findings per source. Model research sees up to 40 keyword-ranked excerpts / 48,000 characters per source; this is a focused analysis, not exhaustive coverage.']
     all_limits += ['No independent source corroboration or authenticated factual attestation. Memory promotion is blocked; pending candidates are not authoritative knowledge.']
     if discovery:
         all_limits.append(discovery.get('limitation', 'Public discovery attempted.'))
-    all_limits += ['Acquisition failed for ' + f['locator'] + ': ' + f['error'] for f in failures]
+    all_limits += ['Acquisition failed for ' + f['locator'] + ': ' + f['error'] +
+                   (' Observed metadata (not analyzed): ' + '; '.join(k + ' ' + str(v) for k, v in f['metadata'].items() if k in DISPLAYED_METADATA and v) + '.'
+                    if any(f.get('metadata', {}).get(k) for k in DISPLAYED_METADATA) else '')
+                   for f in failures]
     all_limits += [flag for s in sources for flag in s['flags']]
     lines += ['- ' + item for item in dict.fromkeys(all_limits)]
     return '\n'.join(lines) + '\n'
