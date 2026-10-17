@@ -11,6 +11,7 @@ from .director import direct, investigate, render_intelligence, synthesize
 from .memory import AuthoritativeMemoryAdapter
 from .sources import acquire, discover, sha, UnsupportedSource
 from .store import JobStore
+from .verify import run_stage as corroborate
 from .workers import codex_available, digest, plan, research
 
 
@@ -159,6 +160,9 @@ class ResearchEngine:
             if verification['packet_sha256'] != digest(claims) or verification['pid'] == os.getpid():
                 raise ValueError('Verification packet/process binding mismatch')
             self.store.put(job_id, 'verification', verification)
+            # Fact verification: separate process discovers independent sources per claim.
+            corroboration = corroborate(sources, claims, verification['assessments'], directory / 'corroboration')
+            self.store.put(job_id, 'corroboration', corroboration.to_dict())
             self.store.update(job_id, 'synthesizing', 'Generating source-cited report and pending candidate')
             report = None
             if claude:
@@ -185,7 +189,8 @@ class ResearchEngine:
                 (directory / 'memory-candidate.json').write_text(json.dumps(candidate, indent=2, ensure_ascii=False), encoding='utf-8')
                 (directory / 'memory-candidate.json').chmod(0o600)
             accepted = [a for a in verification['assessments'] if a['supported']]
-            complete = bool(claims) and len(accepted) == len(claims) and not failures and verification['recommendations_supported'] is True
+            complete = bool(claims) and len(accepted) == len(claims) and not failures and verification['recommendations_supported'] is True \
+                and not corroboration.conflicts()
             self.store.update(job_id, 'completed' if complete else 'needs_more_research',
                               'Report stored; Memory promotion blocked pending authoritative interface', report_path=str(report_path))
         except KeyboardInterrupt:
