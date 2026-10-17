@@ -99,7 +99,8 @@ class ResearchDesk:
             self.engine.store.put(job['id'], PUBLICATION_ARTIFACT, record)
             return self.engine.store.get(job['id'])
         try:
-            record = self.publisher.publish(job['id'], job['artifacts']['memory-candidate'])
+            topic = (job['artifacts'].get(ROUTE_ARTIFACT) or {}).get('topic', 'General')
+            record = self.publisher.publish(job['id'], job['artifacts']['memory-candidate'], topic=topic)
         except Exception as error:
             log.exception('Memory publication failed for %s', job['id'])
             record = {'status': 'failed', 'detail': short(error, 300), 'receipts': []}
@@ -174,11 +175,12 @@ def memory_line(job):
     if publication:
         receipts = publication.get('receipts') or []
         approved = sum(1 for r in receipts if r.get('review_state') == 'approved')
-        pending = sum(1 for r in receipts if r.get('review_state') == 'pending')
+        pending = len(receipts) - approved
+        topic = (' under ' + publication['topic']) if publication.get('topic') else ''
         if publication['status'] == 'published':
-            return 'Memory: ' + str(approved) + ' finding(s) saved to Alfred\'s Memory as approved; Alfred can now use them.'
+            return 'Memory: ' + str(approved) + ' finding(s) saved to Alfred\'s Memory' + topic + ' as approved; Alfred can now use them.'
         if publication['status'] == 'pending_review':
-            return 'Memory: ' + str(approved) + ' approved, ' + str(pending) + ' waiting for review in Alfred\'s Memory.'
+            return 'Memory: ' + str(approved) + ' approved' + topic + ', ' + str(pending) + ' not yet approved in Alfred\'s Memory.'
         if publication['status'] == 'skipped':
             return 'Memory: not published (' + short(publication.get('detail', ''), 120) + '); kept as a local candidate.'
         return 'Memory: not saved (' + short(publication.get('detail', 'error'), 120) + '); findings kept as a local candidate.'

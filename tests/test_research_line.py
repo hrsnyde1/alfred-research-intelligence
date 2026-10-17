@@ -29,7 +29,8 @@ TOKEN = 'r' * 40
 
 
 class FakeMemory:
-    """Mimics focused_v1 create: agent principals get pending unless the kind is auto-approved."""
+    """Mimics focused_v1: create gives agent principals pending unless the kind is auto-approved, and
+    reports any duplicate as approved; search shows the agent approved rows only."""
     def __init__(self, auto=('task_progress', 'development_lesson'), kinds=None):
         self.records, self.auto = [], auto
         self.kinds = kinds or ('personal_fact', 'preference', 'standing_instruction', 'decision', 'task_progress', 'development_lesson')
@@ -40,6 +41,10 @@ class FakeMemory:
                 body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
                 if self.headers.get('Authorization') != 'Bearer ' + TOKEN:
                     return self.reply(403, {'error': 'denied'})
+                if body.get('action') == 'search':
+                    return self.reply(200, [{'id': r['id'], 'content': r['content']} for r in memory.records
+                                            if r['task_id'] == body.get('task_id') and r['review_state'] == 'approved'
+                                            and body.get('query', '') in r['content']])
                 if body.get('action') != 'create' or body.get('kind') not in memory.kinds:
                     return self.reply(400, {'error': 'invalid request'})
                 prior = next((r for r in memory.records if r['source_message_id'] == body['source_message_id']), None)
@@ -86,17 +91,17 @@ class LineTests(unittest.TestCase):
             self.memory.close()
         self.temp.cleanup()
 
-    def config(self, memory_kind=None, **extra):
+    def config(self, memory=False, **extra):
         config = {'enabled': True, 'data_dir': str(self.root / 'line'), 'ledger_dir': str(self.ledger),
                   'outbox_dir': str(self.ledger / 'outbox'), 'binding': dict(BINDING), 'provider': 'extractive'}
-        if memory_kind:
+        if memory:
             config['memory'] = {'enabled': True, 'url': self.memory.url, 'token_file': str(self.token),
-                                'task_id': 'research-line', 'kind': memory_kind, 'allow_extractive': True}
+                                'allow_extractive': True}
         config.update(extra)
         return config
 
-    def line(self, memory_kind=None, **extra):
-        return ResearchLine(self.config(memory_kind, **extra), runner='inline')
+    def line(self, memory=False, **extra):
+        return ResearchLine(self.config(memory, **extra), runner='inline')
 
     def inbound(self, text, **research):
         """Write a record exactly as the connector's persist() does."""
@@ -133,45 +138,70 @@ class LineTests(unittest.TestCase):
         mode = (self.ledger / 'outbox' / (hashlib.sha256(('reply:' + key).encode()).hexdigest() + '.json')).stat().st_mode
         self.assertEqual(mode & 0o777, 0o600)
 
-    def test_findings_are_published_to_memory_as_approved(self):
-        self.memory = FakeMemory(auto=('task_progress', 'development_lesson', 'research_finding'),
-                                 kinds=('development_lesson', 'research_finding'))
-        line = self.line('research_finding')
-        self.inbound('https://example.org/retries')
+    def test_findings_are_published_to_the_topic_task_as_approved(self):
+        self.memory = FakeMemory()
+        line = self.line(memory=True)
+        self.inbound('https://example.org/retries', topic='Taxes')
         with patch('alfred_research.local.sources.http_get', Responses(ROUTES)):
             line.poll_once()
         final = self.outbox()[-1]['text']
-        self.assertIn('saved to Alfred\'s Memory as approved; Alfred can now use them', final)
+        self.assertIn('saved to Alfred\'s Memory under Taxes as approved; Alfred can now use them', final)
         self.assertEqual(len(self.memory.records), 2)
         record = self.memory.records[0]
-        self.assertEqual((record['task_id'], record['kind']), ('research-line', 'research_finding'))
+        self.assertEqual((record['task_id'], record['kind']), ('research-line/taxes', 'task_progress'))
         self.assertTrue(record['content'].startswith('Research finding: The source states:'))
         self.assertIn('Source: Retry guidance - https://example.org/retries (article:html-line', record['content'])
         self.assertIn('not independently corroborated', record['content'])
         self.assertRegex(record['source_message_id'], r'^research:research-[0-9a-f]{32}:C1$')
         job = line.engine.store.get(line.engine.store.list()[0]['id'])
         publication = job['artifacts']['memory-publication']
-        self.assertEqual(publication['status'], 'published')
+        self.assertEqual((publication['status'], publication['topic']), ('published', 'Taxes'))
         self.assertEqual([r['memory_id'] for r in publication['receipts']], ['mem-1', 'mem-2'])
 
-    def test_memory_pending_or_refused_is_reported_honestly(self):
+    def test_missing_or_unknown_topic_files_under_general(self):
         self.memory = FakeMemory()
-        line = self.line('personal_fact')  # agent principal + non-auto kind -> pending
+        line = self.line(memory=True)
+        self.inbound('https://example.org/retries', topic='Secret')
+        with patch('alfred_research.local.sources.http_get', Responses(ROUTES)):
+            line.poll_once()
+        self.assertEqual({r['task_id'] for r in self.memory.records}, {'research-line/general'})
+        self.assertIn('under General as approved', self.outbox()[-1]['text'])
+
+    def test_duplicate_reported_approved_is_checked_against_search(self):
+        self.memory = FakeMemory()
+        line = self.line(memory=True)
         self.inbound('https://example.org/retries')
         with patch('alfred_research.local.sources.http_get', Responses(ROUTES)):
             line.poll_once()
-        self.assertIn('waiting for review', self.outbox()[-1]['text'])
-        refused = self.line('research_finding')  # kind unknown to this Memory release
+        self.memory.records[0]['review_state'] = 'pending'  # Memory later holds the first row back
+        job = line.engine.store.get(line.engine.store.list()[0]['id'])
+        again = line.publisher.publish(job['id'], job['artifacts']['memory-candidate'])
+        self.assertEqual(len(self.memory.records), 2)
+        self.assertEqual([(r['duplicate'], r['reported_state'], r['review_state']) for r in again['receipts']],
+                         [(True, 'approved', 'not_approved'), (True, 'approved', 'approved')])
+        self.assertEqual(again['status'], 'pending_review')
+        self.assertIn('1 approved under General, 1 not yet approved',
+                      desk.memory_line({'artifacts': {desk.PUBLICATION_ARTIFACT: again}}))
+
+    def test_memory_pending_or_refused_is_reported_honestly(self):
+        self.memory = FakeMemory(auto=())  # agent principal + non-auto kind -> pending
+        line = self.line(memory=True)
+        self.inbound('https://example.org/retries')
+        with patch('alfred_research.local.sources.http_get', Responses(ROUTES)):
+            line.poll_once()
+        self.assertIn('0 approved under General, 2 not yet approved', self.outbox()[-1]['text'])
+        self.memory.kinds = ('personal_fact',)  # task_progress unknown to this Memory release
+        refused = self.line(memory=True)
         self.inbound('research again https://example.org/retries')
         with patch('alfred_research.local.sources.http_get', Responses(ROUTES)):
             refused.poll_once()
         final = self.outbox()[-1]['text']
-        self.assertIn('Memory: not saved (Memory refused the record (HTTP 400', final)
+        self.assertIn('Memory: not saved (Memory refused the request (HTTP 400', final)
         self.assertIn('Research complete', final)
 
     def test_extractive_findings_are_not_published_by_default(self):
         self.memory = FakeMemory()
-        config = self.config('development_lesson')
+        config = self.config(memory=True)
         del config['memory']['allow_extractive']
         line = ResearchLine(config, runner='inline')
         self.inbound('https://example.org/retries')
@@ -246,7 +276,18 @@ class LineTests(unittest.TestCase):
     def test_help_text_follows_memory_setting(self):
         self.assertIn('Memory publishing is off', self.line().help_text())
         self.memory = FakeMemory()
-        self.assertIn('save verified findings to Alfred\'s Memory', self.line('development_lesson').help_text())
+        self.assertIn('save verified findings to Alfred\'s Memory', self.line(memory=True).help_text())
+
+    def test_memory_task_and_kind_come_from_the_topic_not_the_config(self):
+        self.memory = FakeMemory()
+        for extra in ({'task_id': 'research-line'}, {'kind': 'research_finding'}):
+            config = self.config(memory=True)
+            config['memory'].update(extra)
+            with self.subTest(extra=extra), self.assertRaisesRegex(ValueError, 'per topic'):
+                ResearchLine(config, runner='inline')
+        config = self.config(memory=True)
+        config['memory']['kind'] = 'task_progress'
+        ResearchLine(config, runner='inline')
 
     def test_cli_once_finishes_jobs_before_exiting(self):
         config = self.root / 'config.json'
@@ -274,12 +315,12 @@ class PublisherTests(unittest.TestCase):
         for url in ('https://127.0.0.1:8000/v1/memory', 'http://10.0.0.5:8000/v1/memory', 'http://127.0.0.1/v1/memory',
                     'http://127.0.0.1:8000/other'):
             with self.subTest(url=url), self.assertRaises(ValueError):
-                MemoryServicePublisher(url, '/x', 'research-line', 'research_finding')
+                MemoryServicePublisher(url, '/x')
         with tempfile.TemporaryDirectory() as root:
             token = Path(root) / 'token'
             token.write_text(TOKEN)
             token.chmod(0o644)
-            publisher = MemoryServicePublisher('http://127.0.0.1:9/v1/memory', token, 'research-line', 'research_finding')
+            publisher = MemoryServicePublisher('http://127.0.0.1:9/v1/memory', token)
             with self.assertRaisesRegex(MemoryBlocked, 'private'):
                 publisher.token()
 
@@ -296,7 +337,7 @@ class PublisherTests(unittest.TestCase):
                 self.assertFalse(credential_metadata_allowed(meta(uid, mode), 980))
 
     def test_tampered_candidate_rejected(self):
-        publisher = MemoryServicePublisher('http://127.0.0.1:9/v1/memory', '/x', 'research-line', 'research_finding')
+        publisher = MemoryServicePublisher('http://127.0.0.1:9/v1/memory', '/x')
         with self.assertRaises(ValueError):
             publisher.publish('research-' + '0' * 32, {'schema': 'research.local.pending-memory/1', 'candidate_sha256': 'bad'})
 
