@@ -6,7 +6,7 @@ import zipfile
 from xml.etree import ElementTree
 
 from .sources import (BINARY_MAX_BYTES, HTML_MAX_BYTES, TEXT_SUFFIXES, Extraction, SourceHandler,
-                      UnsupportedSource, legacy_text_extract, text_evidence)
+                      UnsupportedSource, text_evidence)
 
 
 class TextHandler(SourceHandler):
@@ -14,13 +14,42 @@ class TextHandler(SourceHandler):
 
     def extract(self, data, filename):
         try:
-            evidence, limitations, flags = legacy_text_extract(data, filename)
+            text = data.decode('utf-8-sig')
         except UnicodeDecodeError:
             raise UnsupportedSource('Text documents must be UTF-8; no findings generated.')
+        evidence, limitations, flags = text_evidence('text', text_paragraphs(text))
         basis = 'owner_supplied_transcript' if filename.lower().endswith(('.vtt', '.srt')) else 'full_text'
         if basis == 'owner_supplied_transcript':
             limitations.append('Supplied transcript text only; the original audio/video was not viewed.')
-        return Extraction(evidence, limitations, flags, {}, basis)
+        return Extraction(evidence, limitations, flags, {'lines': len(text.splitlines())}, basis)
+
+
+def text_paragraphs(text, *, small=300, large=1500):
+    """``('lines-A-B', text)`` blocks: blank-line paragraphs, tiny ones merged, long ones split.
+
+    Line numbers are 1-based and refer to the original file, so every quote can
+    be found again by line range.
+    """
+    paragraphs, current = [], []
+    for number, line in enumerate(text.splitlines(), 1):
+        if line.strip():
+            if current and sum(len(x) for _, x in current) + len(line) > large:
+                paragraphs.append(current)
+                current = []
+            current.append((number, line.rstrip()))
+        elif current:
+            paragraphs.append(current)
+            current = []
+    if current:
+        paragraphs.append(current)
+    blocks = []
+    for paragraph in paragraphs:
+        if blocks and sum(len(x) for _, x in blocks[-1]) < small and \
+                sum(len(x) for _, x in blocks[-1] + paragraph) <= large:
+            blocks[-1] = blocks[-1] + paragraph
+        else:
+            blocks.append(paragraph)
+    return [('lines-' + str(block[0][0]) + '-' + str(block[-1][0]), '\n'.join(x for _, x in block)) for block in blocks]
 
 
 SKIP = {'script', 'style', 'template', 'noscript', 'svg', 'nav', 'footer', 'aside', 'form', 'button',
@@ -32,7 +61,9 @@ HEADINGS = {'h1', 'h2', 'h3', 'h4', 'h5', 'h6'}
 BOILERPLATE = {'nav', 'navbar', 'menu', 'footer', 'sidebar', 'cookie', 'cookies', 'consent', 'banner', 'share',
                'sharing', 'social', 'related', 'advert', 'advertisement', 'ads', 'promo', 'breadcrumb',
                'breadcrumbs', 'newsletter', 'subscribe', 'comments', 'popup', 'modal', 'navbox', 'catlinks',
-               'printfooter', 'toc', 'skip', 'masthead', 'pagination'}
+               'printfooter', 'toc', 'skip', 'masthead', 'pagination', 'sponsor', 'sponsored', 'secondary'}
+# Class/id tokens that commonly mark the main text container on pages without <article>/<main>.
+CONTENT = {'entry', 'post', 'article', 'story', 'content', 'entrycontent', 'postcontent', 'articlebody', 'prose'}
 STRUCTURAL = {'html', 'body', 'main', 'article'}
 META = {'author': 'author', 'article:author': 'author', 'publisher': 'publisher', 'og:site_name': 'site_name',
         'article:published_time': 'published_at', 'date': 'published_at', 'og:title': 'title',
@@ -48,6 +79,7 @@ class _Article(HTMLParser):
         self.blocks, self.buffer, self.start = [], [], None
         self.metadata, self.title, self.in_title = {}, [], False
         self.removed = 0
+        self.containers, self.open_containers = [], []   # content-class elements: [(stack depth, index)]
 
     def boilerplate(self, tag, attrs):
         if tag in SKIP or attrs.get('hidden') is not None or attrs.get('aria-hidden') == 'true':
@@ -65,7 +97,8 @@ class _Article(HTMLParser):
         text = ' '.join(''.join(self.buffer).split())
         if text:
             self.blocks.append({'line': self.start, 'text': text, 'heading': bool(HEADINGS & set(self.stack)),
-                                'article': 'article' in self.stack, 'main': 'main' in self.stack})
+                                'article': 'article' in self.stack, 'main': 'main' in self.stack,
+                                'containers': tuple(index for _, index in self.open_containers)})
         self.buffer, self.start = [], None
 
     def handle_starttag(self, tag, attrs):
@@ -94,6 +127,10 @@ class _Article(HTMLParser):
         if tag in BLOCK:
             self.flush()
         self.stack.append(tag)
+        tokens = set(re.split(r'[\s_-]+', ((values.get('class') or '') + ' ' + (values.get('id') or '')).lower()))
+        if tokens & CONTENT:
+            self.open_containers.append((len(self.stack), len(self.containers)))
+            self.containers.append(tag)
 
     def handle_endtag(self, tag):
         if self.skip_tag:
@@ -109,6 +146,8 @@ class _Article(HTMLParser):
                 self.flush()
             while self.stack and self.stack.pop() != tag:
                 pass
+            while self.open_containers and self.open_containers[-1][0] > len(self.stack):
+                self.open_containers.pop()
 
     def handle_data(self, data):
         if self.in_title:
@@ -158,11 +197,25 @@ class ArticleHandler(SourceHandler):
             if sum(len(b['text']) for b in chosen) >= 100:
                 blocks, scope = chosen, key
                 break
+        if scope == 'page' and parser.containers:
+            # No <article>/<main>: use the innermost content-class container that
+            # still holds most of the text any such container holds.
+            sizes = {}
+            for block in blocks:
+                for index in block['containers']:
+                    sizes[index] = sizes.get(index, 0) + len(block['text'])
+            top = max(sizes, key=sizes.get, default=None)
+            if top is not None and sizes[top] >= 500:
+                nested = {i for b in blocks if top in b['containers'] for i in b['containers']}
+                index = max(i for i in nested if sizes[i] >= 0.8 * sizes[top] and
+                            all(top in b['containers'] for b in blocks if i in b['containers']))
+                blocks, scope = [b for b in blocks if index in b['containers']], 'content container'
         # Drop stray navigation residue such as single-word links, keep headings.
         blocks = [b for b in blocks if b['heading'] or len(b['text'].split()) >= 3]
         if parser.removed:
             limitations.append('Boilerplate regions removed (navigation, footers, sidebars, cookie/share widgets); '
-                               'main content taken from <' + scope + '>.' if scope != 'page' else
+                               'main content taken from ' + (scope if scope == 'content container' else '<' + scope + '>') + '.'
+                               if scope != 'page' else
                                'Boilerplate regions removed (navigation, footers, sidebars, cookie/share widgets).')
         if sum(len(b['text']) for b in blocks) < 100:
             # Heuristics can over-remove; fall back to every visible block rather than lose content.

@@ -233,6 +233,7 @@ class GitHubHandler(SourceHandler):
 # ---------------------------------------------------------------- YouTube
 
 VIDEO_ID = re.compile(r'[A-Za-z0-9_-]{11}')
+ANDROID_CLIENT_VERSION = '20.10.38'
 YOUTUBE_HOSTS = ('youtube.com', 'www.youtube.com', 'm.youtube.com', 'music.youtube.com', 'youtu.be', 'www.youtu.be')
 
 
@@ -309,15 +310,48 @@ class YouTubeHandler(SourceHandler):
         if status and status != 'OK':
             raise UnsupportedSource('YouTube video not playable without sign-in (' + status + '); transcript not accessible. '
                                     'Submit a transcript file. No findings were inferred from the title.', metadata)
-        tracks = (((player.get('captions') or {}).get('playerCaptionsTracklistRenderer') or {}).get('captionTracks') or [])
-        track = choose_track(tracks)
+        caption_source = 'youtube timedtext (web player caption track)'
+        try:
+            track, raw, segments = self.captions(player, metadata)
+        except UnsupportedSource:
+            raise
+        except (ValueError, OSError):
+            track, raw, segments = None, b'', []
+        if not segments:
+            # The web client's caption URLs now need a proof-of-origin token and
+            # come back empty. YouTube's public player API (Android client
+            # context, no credentials) lists caption URLs that still serve text.
+            fallback = self.android_player(page, video)
+            if fallback is not None:
+                track, raw, segments = self.captions(fallback, metadata)
+                caption_source = 'youtube timedtext (public player API, android client context)'
         if track is None:
             raise UnsupportedSource('No accessible caption track for this YouTube video; transcript not accessible. '
                                     'Submit a transcript file. No findings were inferred from the title.', metadata)
+        if not segments:
+            raise UnsupportedSource('YouTube listed captions but returned no caption text to an unauthenticated client; '
+                                    'transcript not accessible. Submit a transcript file. No findings were inferred '
+                                    'from the title.', metadata)
+        snapshot = {'schema': 'research.youtube-snapshot/1', 'metadata': metadata,
+                    'description': details.get('shortDescription') or '',
+                    'caption_track': {'language': track.get('languageCode'), 'auto_generated': track.get('kind') == 'asr',
+                                      'name': ((track.get('name') or {}).get('simpleText') or
+                                               ''.join(r.get('text', '') for r in (track.get('name') or {}).get('runs', [])))},
+                    'watch_page_sha256': sha(page), 'caption_response_sha256': sha(raw), 'segments': segments}
+        return bundle(snapshot), 'youtube.json', {**provenance, 'requested_url': url, 'caption_source': caption_source,
+                                                  'content_type': 'application/json'}
+
+    def captions(self, player, metadata):
+        """``(track, raw response, timed segments)`` for the best caption track a player response lists."""
+        tracks = (((player.get('captions') or {}).get('playerCaptionsTracklistRenderer') or {}).get('captionTracks') or [])
+        track = choose_track(tracks)
+        if track is None:
+            return None, b'', []
         caption_url = track['baseUrl']
         if host_of(caption_url) not in YOUTUBE_HOSTS:
             raise UnsupportedSource('Unexpected caption host; transcript not acquired.', metadata)
-        raw, _, _ = sources.http_get(caption_url + '&fmt=json3', max_bytes=5_000_000)
+        caption_url = re.sub(r'&fmt=[^&]*', '', caption_url) + '&fmt=json3'
+        raw, _, _ = sources.http_get(caption_url, max_bytes=5_000_000)
         segments = []
         try:
             for event in json.loads(raw).get('events', []) if raw.strip() else []:
@@ -326,17 +360,25 @@ class YouTubeHandler(SourceHandler):
                     segments.append({'start_ms': event['tStartMs'], 'duration_ms': event.get('dDurationMs') or 0, 'text': text})
         except (ValueError, AttributeError):
             segments = []
-        if not segments:
-            raise UnsupportedSource('YouTube listed captions but returned no caption text to an unauthenticated client; '
-                                    'transcript not accessible. Submit a transcript file.', metadata)
-        snapshot = {'schema': 'research.youtube-snapshot/1', 'metadata': metadata,
-                    'description': details.get('shortDescription') or '',
-                    'caption_track': {'language': track.get('languageCode'), 'auto_generated': track.get('kind') == 'asr',
-                                      'name': ((track.get('name') or {}).get('simpleText') or
-                                               ''.join(r.get('text', '') for r in (track.get('name') or {}).get('runs', [])))},
-                    'watch_page_sha256': sha(page), 'caption_response_sha256': sha(raw), 'segments': segments}
-        return bundle(snapshot), 'youtube.json', {**provenance, 'requested_url': url, 'caption_source': 'youtube timedtext',
-                                                  'content_type': 'application/json'}
+        return track, raw, segments
+
+    def android_player(self, page, video):
+        key = re.search(r'"INNERTUBE_API_KEY"\s*:\s*"([A-Za-z0-9_-]{20,60})"', page.decode('utf-8', 'replace'))
+        if not key:
+            return None
+        body = json.dumps({'context': {'client': {'clientName': 'ANDROID', 'clientVersion': ANDROID_CLIENT_VERSION,
+                                                  'hl': 'en'}}, 'videoId': video}).encode()
+        try:
+            data, _, _ = sources.http_get('https://www.youtube.com/youtubei/v1/player?key=' + key.group(1),
+                                          max_bytes=6_000_000, body=body, headers={'Content-Type': 'application/json'})
+            value = json.loads(data)
+        except (ValueError, OSError):
+            return None
+        if not isinstance(value, dict) or (value.get('playabilityStatus') or {}).get('status') != 'OK':
+            return None
+        if (value.get('videoDetails') or {}).get('videoId') not in (None, video):
+            return None
+        return value
 
     def extract(self, data, filename):
         snapshot = load_bundle(data, 'research.youtube-snapshot/1')
@@ -406,13 +448,21 @@ class InstagramHandler(SourceHandler):
         parser = _Meta()
         parser.feed(page.decode('utf-8', 'replace'))
         meta = parser.values
-        metadata = {k: meta[v] for k, v in (('title', 'og:title'), ('url', 'og:url'), ('type', 'og:type')) if v in meta}
+        metadata = {k: ' '.join(meta[v].split())[:200] for k, v in (('title', 'og:title'), ('url', 'og:url'),
+                                                                    ('type', 'og:type')) if v in meta}
         metadata['video_listed'] = bool(meta.get('og:video') or meta.get('og:video:secure_url') or
                                         meta.get('og:type') == 'video.other')
         caption = meta.get('og:description') or meta.get('description') or ''
         if not caption.strip() or (LOGIN_WALL.search(caption) and len(caption) < 160 and '"' not in caption):
-            raise UnsupportedSource('Instagram returned no public caption (login wall, private or removed post). '
-                                    'Submit the caption or a transcript as text; nothing was inferred.', metadata)
+            raise UnsupportedSource('Instagram returned no public caption (login wall, private or removed post), so the '
+                                    'Reel/post was not watched and its caption was not read. Submit the caption or a '
+                                    'transcript as text; nothing was inferred.', metadata)
+        # og:description truncates long captions; og:title often carries the whole caption.
+        title = meta.get('og:title') or ''
+        if '"' in title and len(title.split('"', 1)[1]) > len(caption.split('"', 1)[-1]):
+            metadata['caption_field'] = 'og:title'
+            return title, metadata
+        metadata['caption_field'] = 'og:description'
         return caption, metadata
 
     def extract(self, data, filename):
@@ -420,5 +470,6 @@ class InstagramHandler(SourceHandler):
         evidence, limitations, flags = text_evidence('instagram', [('caption-metadata', caption)])
         limitations.insert(0, 'Caption/description text from the public page metadata only. The Reel or post media '
                               'was not watched or transcribed, so spoken or on-screen claims are absent.')
-        limitations.append('Instagram metadata may truncate long captions and prefixes them with engagement counts.')
+        limitations.append('Instagram metadata may truncate long captions and prefixes them with the account name or '
+                           'engagement counts (caption read from ' + metadata.get('caption_field', 'page metadata') + ').')
         return Extraction(evidence, limitations, flags, metadata, 'caption_metadata_only')
