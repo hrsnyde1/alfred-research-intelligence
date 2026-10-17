@@ -11,6 +11,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
+os.environ.setdefault('ALFRED_RESEARCH_CORROBORATION', 'off')  # engine runs in unit tests never reach the network
 from alfred_research.local.engine import ResearchEngine
 from alfred_research.local.memory import AuthoritativeMemoryAdapter, MemoryBlocked
 from alfred_research.local.sources import acquire, extract, fetch, UnsupportedSource

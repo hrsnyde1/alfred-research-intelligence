@@ -12,6 +12,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
+os.environ.setdefault('ALFRED_RESEARCH_CORROBORATION', 'off')  # engine runs in unit tests never reach the network
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from alfred_research.integration import desk, research_line
 from alfred_research.integration.research_line import ResearchLine, main, private_write
