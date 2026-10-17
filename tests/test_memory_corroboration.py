@@ -56,7 +56,33 @@ class PrepareTests(unittest.TestCase):
         self.assertIsNone(self.prepare(corroboration(claims, {c['claim_id']: 'contradicted' for c in claims}).to_dict()))
 
     def test_job_without_corroboration_keeps_support_only_selection(self):
-        self.assertEqual([c['claim_id'] for c in self.prepare(None)['claims']], ['C1', 'C2', 'C3'])
+        candidate = self.prepare(None)
+        self.assertEqual([c['claim_id'] for c in candidate['claims']], ['C1', 'C2', 'C3'])
+        self.assertEqual({c['corroboration']['status'] for c in candidate['claims']}, {'unverified'})
+
+    def test_each_claim_records_its_corroboration_status(self):
+        claims, _ = packet()
+        result = corroboration(claims, {'C1': 'corroborated', 'C2': 'original_source_only', 'C3': 'unverified'},
+                               groups=('reuters', 'apnews'))
+        candidate = self.prepare(result.to_dict())
+        records = {c['claim_id']: c['corroboration'] for c in candidate['claims']}
+        self.assertEqual(records['C1'], {'status': 'corroborated', 'independent_groups': 2, 'note': 'because corroborated'})
+        self.assertEqual(records['C2']['status'], 'original_source_only')
+        self.assertEqual(records['C3']['status'], 'unverified')
+
+    def test_original_source_only_and_unverified_are_never_marked_corroborated(self):
+        claims, _ = packet()
+        result = corroboration(claims, {'C1': 'original_source_only', 'C2': 'unverified', 'C3': 'not_assessable'},
+                               groups=('reuters', 'apnews'))
+        for claim in self.prepare(result.to_dict())['claims']:
+            self.assertNotEqual(claim['corroboration']['status'], 'corroborated')
+            self.assertEqual(claim['corroboration']['independent_groups'], 0)
+
+    def test_corroboration_for_a_different_packet_is_refused(self):
+        claims, _ = packet()
+        other = [{**c, 'statement': c['statement'] + ' changed'} for c in claims]
+        with self.assertRaises(ValueError):
+            self.prepare(corroboration(other, {}).to_dict())
 
     def test_malformed_corroboration_fails_closed(self):
         with self.assertRaises(ValueError):
@@ -97,6 +123,40 @@ class LineCorroborationTests(LineHarness):
         self.assertEqual([c['claim_id'] for c in job['artifacts']['memory-candidate']['claims']], ['C2'])
         self.assertEqual([r['source_message_id'].rsplit(':', 1)[-1] for r in self.memory.records], ['C2'])
         self.assertEqual(job['artifacts']['memory-publication']['status'], 'published')
+        self.assertIn('not independently corroborated (original source only)', self.memory.records[0]['content'])
+
+    def test_engine_records_corroboration_status_on_the_candidate(self):
+        def stage(sources, claims, support, directory):
+            return corroboration(claims, {'C1': 'corroborated', 'C2': 'original_source_only'}, groups=('reuters',))
+        line = self.published_line()
+        with patch('alfred_research.local.engine.corroborate', stage):
+            job = self.run_job(line)
+        candidate = job['artifacts']['memory-candidate']
+        self.assertEqual({c['claim_id']: c['corroboration']['status'] for c in candidate['claims']},
+                         {'C1': 'corroborated', 'C2': 'original_source_only'})
+        saved = json.loads((Path(job['report_path']).parent / 'memory-candidate.json').read_text())
+        self.assertEqual(saved, candidate)
+        contents = {r['source_message_id'].rsplit(':', 1)[-1]: r['content'] for r in self.memory.records}
+        self.assertIn('independently corroborated by 1 publisher group(s)', contents['C1'])
+        self.assertIn('not independently corroborated (original source only)', contents['C2'])
+
+    def test_desk_withholds_conflicts_found_after_the_candidate_and_keeps_old_jobs(self):
+        quiet = self.line()                                 # publishing off: candidates kept, nothing sent
+        job, old_job = self.run_job(quiet), self.run_job(quiet, 'research again https://example.org/retries')
+        self.assertNotIn('memory-publication', job['artifacts'])
+        claims = job['artifacts']['research']['claims']
+        self.assertEqual(len(job['artifacts']['memory-candidate']['claims']), 2)
+        line = self.published_line()
+
+        conflicted = {**job, 'artifacts': {**job['artifacts'],
+                                           'corroboration': corroboration(claims, {'C2': 'disputed'}).to_dict()}}
+        record = line.publish(conflicted)['artifacts']['memory-publication']
+        self.assertEqual(([r['claim_id'] for r in record['receipts']], record['withheld']), (['C1'], ['C2']))
+        self.assertEqual([r['source_message_id'].rsplit(':', 1)[-1] for r in self.memory.records], ['C1'])
+
+        older = {k: v for k, v in old_job['artifacts'].items() if k != 'corroboration'}   # pre-corroboration job
+        record = line.publish({**old_job, 'artifacts': older})['artifacts']['memory-publication']
+        self.assertEqual(([r['claim_id'] for r in record['receipts']], record['withheld']), (['C1', 'C2'], []))
 
 
 if __name__ == '__main__':
