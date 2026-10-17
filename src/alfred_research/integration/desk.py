@@ -9,6 +9,7 @@ import logging
 import threading
 
 from ..local.engine import ResearchEngine
+from ..local.memory import withheld_claims
 
 log = logging.getLogger(__name__)
 ROUTE_ARTIFACT = 'hermes-route'           # name kept for stored-job compatibility
@@ -100,7 +101,9 @@ class ResearchDesk:
             return self.engine.store.get(job['id'])
         try:
             topic = (job['artifacts'].get(ROUTE_ARTIFACT) or {}).get('topic', 'General')
-            record = self.publisher.publish(job['id'], job['artifacts']['memory-candidate'], topic=topic)
+            # Disputed/contradicted claims never reach Memory; jobs without corroboration keep support-only selection.
+            withheld = withheld_claims(job['artifacts'].get('corroboration'))
+            record = self.publisher.publish(job['id'], job['artifacts']['memory-candidate'], topic=topic, exclude=withheld)
         except Exception as error:
             log.exception('Memory publication failed for %s', job['id'])
             record = {'status': 'failed', 'detail': short(error, 300), 'receipts': []}

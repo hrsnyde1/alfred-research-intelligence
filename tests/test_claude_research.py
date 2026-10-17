@@ -202,7 +202,7 @@ class ClaudeResearchTests(unittest.TestCase):
                 self.calls = []
                 self.topics = []
 
-            def publish(self, job_id, candidate, topic=None):
+            def publish(self, job_id, candidate, topic=None, exclude=()):
                 self.calls.append(job_id)
                 self.topics.append(topic)
                 return {'status': 'pending_review', 'receipts': [{'review_state': 'pending'}]}

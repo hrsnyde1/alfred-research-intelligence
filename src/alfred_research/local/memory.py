@@ -6,6 +6,7 @@ from pathlib import Path
 import stat
 from urllib.parse import urlsplit
 
+from .verify import VerificationResult
 from .workers import digest
 
 # Mirrors alfred-memory src/obsidian_candidate/routing.py (r59): approved records from the
@@ -27,6 +28,28 @@ class MemoryBlocked(RuntimeError):
     pass
 
 
+UNCORROBORATED = {'status': 'unverified', 'independent_groups': 0,
+                  'note': 'No corroboration stage ran for this job; only the original source was checked.'}
+
+
+def corroboration_record(row):
+    """What a candidate claim carries about its corroboration. Only ``corroborated`` claims count independent publisher
+    groups; original_source_only and unverified are never described as corroborated."""
+    groups = len(set(row.independent_groups)) if row.status == 'corroborated' else 0
+    return {'status': row.status, 'independent_groups': groups, 'note': row.rationale}
+
+
+def withheld_claims(corroboration):
+    """Claim ids the corroboration stage found disputed or contradicted; these never reach Memory.
+
+    Jobs from before the corroboration stage have no artifact and keep source-support-only
+    selection. A malformed artifact raises rather than silently publishing everything.
+    """
+    if corroboration is None:
+        return set()
+    return set(VerificationResult.from_dict(corroboration).conflicts())
+
+
 class AuthoritativeMemoryAdapter:
     """Observed /v1/memory supports generic create/review, not Research promotion.
 
@@ -39,14 +62,22 @@ class AuthoritativeMemoryAdapter:
     blocker = ('Installed Memory has no authorized live Research candidate/promotion interface '
                'or independent attestation trust contract. No Memory write attempted.')
 
-    def prepare(self, job_id, request, claims, sources, verification, report_sha256):
+    def prepare(self, job_id, request, claims, sources, verification, report_sha256, corroboration=None):
         if verification.get('packet_sha256') != digest(claims):
             raise ValueError('Candidate packet differs from verified packet')
         rows = verification.get('assessments', [])
         if len(rows) != len(claims) or {r['claim_id'] for r in rows} != {c['claim_id'] for c in claims}:
             raise ValueError('Incomplete independent verification')
-        approved = {r['claim_id'] for r in rows if r['supported'] is True}
-        eligible = [c for c in claims if c['claim_id'] in approved and c['kind'] == 'source_statement']
+        if corroboration is None:
+            statuses = {}
+        else:
+            result = VerificationResult.from_dict(corroboration)
+            if result.packet_sha256 != digest(claims) or {c.claim_id for c in result.claims} != {c['claim_id'] for c in claims}:
+                raise ValueError('Corroboration packet differs from verified packet')
+            statuses = {c.claim_id: corroboration_record(c) for c in result.claims}
+        approved = {r['claim_id'] for r in rows if r['supported'] is True} - withheld_claims(corroboration)
+        eligible = [{**c, 'corroboration': statuses.get(c['claim_id'], UNCORROBORATED)}
+                    for c in claims if c['claim_id'] in approved and c['kind'] == 'source_statement']
         if not eligible:
             return None
         body = {'schema': 'research.local.pending-memory/1', 'job_id': job_id, 'environment': 'personal',
@@ -79,6 +110,13 @@ def credential_metadata_allowed(info, service_uid):
     otherwise only 0400/0600 owned by root or the service UID."""
     mode = stat.S_IMODE(info.st_mode)
     return info.st_uid in (0, service_uid) and (mode in (0o400, 0o600) or (info.st_uid == 0 and mode == 0o440))
+
+
+def corroboration_line(claim):
+    record = claim.get('corroboration') or UNCORROBORATED   # candidates prepared before corroboration was recorded
+    if record['status'] == 'corroborated' and record.get('independent_groups', 0) > 0:
+        return 'independently corroborated by ' + str(record['independent_groups']) + ' publisher group(s)'
+    return 'not independently corroborated (' + record['status'].replace('_', ' ') + ')'
 
 
 class MemoryServicePublisher:
@@ -134,12 +172,19 @@ class MemoryServicePublisher:
         rows = self.call(token, {'action': 'search', 'task_id': task_id, 'query': reference, 'limit': 4})
         return isinstance(rows, list) and any(isinstance(r, dict) and r.get('id') == memory_id for r in rows)
 
-    def publish(self, job_id, candidate, topic=DEFAULT_RESEARCH_TOPIC):
+    def publish(self, job_id, candidate, topic=DEFAULT_RESEARCH_TOPIC, exclude=()):
+        """``exclude``: claim ids withheld at publish time (disputed or contradicted by corroboration)."""
         AuthoritativeMemoryAdapter()._validate(candidate)
         task_id = research_task(topic)
-        sources = {s['source_id']: s for s in candidate['sources']}
+        sources, exclude = {s['source_id']: s for s in candidate['sources']}, set(exclude)
+        claims = [c for c in candidate['claims'] if c['claim_id'] not in exclude]
+        withheld = sorted(c['claim_id'] for c in candidate['claims'] if c['claim_id'] in exclude)
+        if not claims:
+            return {'status': 'nothing_to_publish', 'kind': self.kind, 'topic': topic, 'task_id': task_id, 'receipts': [],
+                    'withheld': withheld, 'candidate_sha256': candidate['candidate_sha256'],
+                    'detail': 'every finding was disputed or contradicted by independent sources; none sent to Memory'}
         token, receipts = self.token(), []
-        for claim in candidate['claims']:
+        for claim in claims:
             source = sources.get(claim['source_id'], {})
             location = next((e['location'] for e in source.get('evidence', []) if e['evidence_id'] == claim['evidence_id']),
                             claim['evidence_id']).split(':char')[0]
@@ -149,7 +194,7 @@ class MemoryServicePublisher:
                 'Research finding: ' + claim['statement'],
                 'Source: ' + ((title + ' - ') if title else '') + source.get('locator', '?') + ' (' + location + '), retrieved ' +
                 str(source.get('acquired_at', '?')) + '.',
-                'Verification: exact quotation checked against the saved source; not independently corroborated.',
+                'Verification: exact quotation checked against the saved source; ' + corroboration_line(claim) + '.',
                 reference]))[:4096]
             result = self.call(token, {'action': 'create', 'task_id': task_id, 'kind': self.kind, 'content': content,
                                        'source_message_id': 'research:' + job_id + ':' + claim['claim_id']})
@@ -161,5 +206,5 @@ class MemoryServicePublisher:
         states = {r['review_state'] for r in receipts}
         status = 'published' if receipts and states == {'approved'} else ('pending_review' if receipts else 'nothing_to_publish')
         return {'status': status, 'kind': self.kind, 'topic': topic, 'task_id': task_id, 'receipts': receipts,
-                'candidate_sha256': candidate['candidate_sha256'],
+                'withheld': withheld, 'candidate_sha256': candidate['candidate_sha256'],
                 'detail': 'review_state read back with search after create; Memory create responses are not trusted for it.'}
