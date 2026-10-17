@@ -5,7 +5,7 @@ import re
 import zipfile
 from xml.etree import ElementTree
 
-from .sources import (BINARY_MAX_BYTES, TEXT_SUFFIXES, Extraction, SourceHandler,
+from .sources import (BINARY_MAX_BYTES, HTML_MAX_BYTES, TEXT_SUFFIXES, Extraction, SourceHandler,
                       UnsupportedSource, legacy_text_extract, text_evidence)
 
 
@@ -24,7 +24,7 @@ class TextHandler(SourceHandler):
 
 
 SKIP = {'script', 'style', 'template', 'noscript', 'svg', 'nav', 'footer', 'aside', 'form', 'button',
-        'select', 'iframe', 'canvas', 'dialog', 'menu'}
+        'select', 'iframe', 'canvas', 'dialog', 'menu', 'annotation'}  # annotation: MathML TeX source
 VOID = {'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'source', 'track', 'wbr'}
 BLOCK = {'p', 'div', 'li', 'blockquote', 'pre', 'td', 'th', 'tr', 'section', 'article', 'main', 'table',
          'figcaption', 'dd', 'dt', 'ul', 'ol', 'header', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'body'}
@@ -88,7 +88,7 @@ class _Article(HTMLParser):
             return
         if self.boilerplate(tag, values):
             self.skip_tag, self.skip_depth = tag, 1
-            if tag not in ('script', 'style', 'template', 'noscript', 'svg'):
+            if tag not in ('script', 'style', 'template', 'noscript', 'svg', 'annotation'):
                 self.removed += 1
             return
         if tag in BLOCK:
@@ -143,7 +143,7 @@ def article_blocks(html):
 
 
 class ArticleHandler(SourceHandler):
-    name, kind, suffixes = 'article', 'article', ('.html', '.htm')
+    name, kind, suffixes, max_bytes = 'article', 'article', ('.html', '.htm'), HTML_MAX_BYTES
 
     def extract(self, data, filename):
         html, note = decode_html(data)

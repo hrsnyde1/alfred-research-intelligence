@@ -1,0 +1,16 @@
+{
+  "enabled": false,
+  "data_dir": "/var/lib/alfred-research-line",
+  "ledger_dir": "/var/lib/alfredresearch-photon",
+  "outbox_dir": "/var/lib/alfredresearch-photon/outbox",
+  "binding": {"line": "<RESEARCH_LINE_PHONE_LABEL>", "space": "<RESEARCH_CONVERSATION_SPACE_ID>", "sender": "<OWNER_SENDER_ID>"},
+  "provider": "extractive",
+  "poll_seconds": 3,
+  "memory": {
+    "enabled": false,
+    "url": "http://127.0.0.1:<MEMORY_PORT>/v1/memory",
+    "token_file": "${CREDENTIALS_DIRECTORY}/memory-token",
+    "task_id": "research-line",
+    "kind": "<research_finding|development_lesson>"
+  }
+}

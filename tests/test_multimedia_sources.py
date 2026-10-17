@@ -119,8 +119,11 @@ class Responses:
             if url.startswith(prefix):
                 if isinstance(body, Exception):
                     raise body
+                media = 'application/json'
+                if isinstance(body, tuple):
+                    body, media = body
                 data = body if isinstance(body, bytes) else json.dumps(body).encode()
-                return data, 'application/json', {'origin': 'live_https', 'requested_url': url, 'final_url': url,
+                return data, media, {'origin': 'live_https', 'requested_url': url, 'final_url': url,
                                                   'redirects': [{'url': url, 'status': 200}], 'content_type': 'x'}
         raise AssertionError('unexpected network call ' + url)
 

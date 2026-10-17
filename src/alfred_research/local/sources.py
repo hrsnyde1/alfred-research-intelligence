@@ -21,6 +21,7 @@ from ..sources.policy import FutureNetworkPolicy, Meter, ProcessingLimits
 
 MAX_BYTES = 1_000_000
 BINARY_MAX_BYTES = 20_000_000   # PDF/DOCX snapshots
+HTML_MAX_BYTES = 5_000_000      # pages; extracted text is capped separately
 MAX_EXTRACTED_CHARACTERS = 1_500_000
 TEXT_SUFFIXES = ('.txt', '.md', '.csv', '.vtt', '.srt')
 
@@ -274,12 +275,12 @@ def fetch(url, *, allow_json=False):
         filename = 'source.pdf'
     elif media == DOCX_MEDIA or (path.endswith('.docx') and data.startswith(b'PK')):
         filename = 'source.docx'
+    elif media in ('text/html', 'application/xhtml+xml') and len(data) <= HTML_MAX_BYTES:
+        filename = 'source.html'
     elif len(data) > MAX_BYTES:
-        raise ValueError('Source exceeds 1 MB limit')
+        raise ValueError('Source exceeds size limit (5 MB for HTML, 1 MB for other text)')
     elif allow_json and media == 'application/json':
         filename = 'response.json'
-    elif media in ('text/html', 'application/xhtml+xml'):
-        filename = 'source.html'
     elif media.startswith('text/') or path.endswith(TEXT_SUFFIXES):
         filename = 'source.txt'
     else:
