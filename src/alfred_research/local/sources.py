@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 import hashlib
 import http.client
 import json
+import os
 import socket
 import ssl
 import time
@@ -164,36 +165,6 @@ def extract(data, filename):
     return result.evidence, result.limitations, result.flags
 
 
-def legacy_text_extract(data, filename):
-    """Original line-range text extraction, retained unchanged for text formats."""
-    suffix = Path(filename).suffix.lower()
-    evidence, limitations, flags = [], [], []
-    # Preserve all lines of long standards/articles rather than silently
-    # researching only the table of contents under the legacy 128-line cap.
-    text = data.decode('utf-8')
-    parts, pending, start = [], [], 1
-    for number, line in enumerate(text.splitlines(keepends=True), 1):
-        if pending and (len(pending) >= 100 or len(''.join(pending)) + len(line) > 60000):
-            parts.append((f'lines-{start}-{number-1}' + suffix, ''.join(pending).encode()))
-            pending, start = [], number
-        pending.append(line)
-    if pending:
-        parts.append((f'lines-{start}-{start+len(pending)-1}' + suffix, ''.join(pending).encode()))
-    for part_name, part_data in parts:
-        file = FixtureFile(part_name, part_data)
-        snapshot = SourceFixture(files=(file,), origin='user_supplied')
-        collector = Collector('personal', snapshot, Meter(ProcessingLimits(characters=128000, segments=256)))
-        # Keep wrapped prose together for entailment review. Collector is
-        # the existing bounded text/evidence implementation used by all
-        # legacy adapters; locations retain original line-range + offset.
-        collector.inventory(file)
-        collector.add(file, part_data.decode('utf-8'), 'text')
-        evidence.extend(e.payload() for e in collector.evidence)
-        limitations.extend(collector.limitations)
-        flags.extend(collector.flags)
-    return evidence, list(dict.fromkeys(limitations)), list(dict.fromkeys(flags))
-
-
 class PinnedHTTPS(http.client.HTTPSConnection):
     def __init__(self, host, address, timeout):
         context = ssl.create_default_context()
@@ -213,8 +184,9 @@ class PinnedHTTPS(http.client.HTTPSConnection):
             raise
 
 
-def http_get(url, *, max_bytes=MAX_BYTES, headers=None):
-    """Public HTTPS GET with pinned addresses, validated redirects and bounds.
+def http_get(url, *, max_bytes=MAX_BYTES, headers=None, body=None):
+    """Public HTTPS GET (or POST of a small public ``body``) with pinned addresses,
+    validated redirects and bounds.
 
     Returns ``(bytes, media_type, provenance)``. Never sends credentials.
     """
@@ -234,12 +206,13 @@ def http_get(url, *, max_bytes=MAX_BYTES, headers=None):
             raise TimeoutError('Source acquisition deadline exceeded')
         connection = PinnedHTTPS(p.hostname, addresses[0], min(15, remaining))
         try:
-            connection.request('GET', (p.path or '/') + ('?' + p.query if p.query else ''), headers=request_headers)
+            connection.request('GET' if body is None else 'POST', (p.path or '/') + ('?' + p.query if p.query else ''),
+                               body=body, headers=request_headers)
             response = connection.getresponse()
             chain.append({'url': url, 'status': response.status})
             if response.status in (301, 302, 303, 307, 308):
-                if hop >= 3 or not response.getheader('Location'):
-                    raise ValueError('Redirect limit or missing redirect target')
+                if hop >= 3 or not response.getheader('Location') or body is not None:
+                    raise ValueError('Redirect limit, missing redirect target, or redirected POST')
                 url = urljoin(url, response.getheader('Location'))
                 continue
             if response.status != 200:
@@ -299,6 +272,47 @@ def discover(question):
             for row in rows[:2] if isinstance(row.get('title'), str)]
 
 
+def stage_upload(path, original_filename, root):
+    """Place a chat-uploaded file where Research can take it as a local source.
+
+    Chat hosts (Telegram, iMessage) save uploads under opaque names such as
+    ``documents/file_7``. Research selects the extractor from the file suffix
+    and reports the file name as provenance, so the upload is copied to
+    ``root/<sha256 prefix>/<sanitized original filename>`` (owner-only) and that
+    path is returned for the message intake ``attachments`` list (``root`` must
+    be one of its ``attachment_roots``). Unsupported types are refused here,
+    before any job exists. Content is never trusted: each handler still
+    validates the bytes (a renamed PNG is not a PDF).
+    """
+    source = Path(path).expanduser().resolve(strict=True)
+    if not source.is_file():
+        raise ValueError('Upload must be a regular file')
+    name = Path(str(original_filename or '').replace('\\', '/')).name
+    name = ''.join(c if c.isalnum() or c in ' ._-()' else '_' for c in name).strip(' .')[:120]
+    if not name:
+        raise ValueError('Upload needs its original file name')
+    handler = handler_for_snapshot('source' + Path(name).suffix.lower())
+    if handler is None:
+        raise UnsupportedSource(supported_formats() + ' Unsupported file type: ' + (Path(name).suffix or 'none') +
+                                '. The upload was not analyzed.', {'title': name})
+    if source.stat().st_size > handler.max_bytes:
+        raise ValueError('Upload must be at most ' + str(handler.max_bytes // 1_000_000) + ' MB')
+    data = source.read_bytes()
+    base = Path(root).expanduser().resolve()
+    base.mkdir(mode=0o700, parents=True, exist_ok=True)
+    folder = base / sha(data)[:16]
+    folder.mkdir(mode=0o700, exist_ok=True)
+    target = folder / name
+    if not target.exists():
+        temporary = folder / ('.' + name + '.' + os.urandom(4).hex() + '.tmp')
+        temporary.write_bytes(data)
+        temporary.chmod(0o600)
+        os.replace(temporary, target)
+    elif sha(target.read_bytes()) != sha(data):
+        raise ValueError('Staged upload changed on disk: ' + str(target))
+    return str(target)
+
+
 def acquire(locator, destination, index):
     if locator.startswith(('https://', 'http://')):
         handler = handler_for_url(locator)
@@ -317,7 +331,7 @@ def acquire(locator, destination, index):
         if path.stat().st_size > handler.max_bytes:
             raise ValueError('Source must be at most ' + str(handler.max_bytes // 1_000_000) + ' MB')
         data = path.read_bytes()
-        provenance = {'origin': 'owner_file', 'path': str(path)}
+        provenance = {'origin': 'owner_file', 'path': str(path), 'original_filename': path.name}
     result = extract_document(data, filename)
     snapshot = destination / (str(index) + '-' + filename)
     snapshot.write_bytes(data)
