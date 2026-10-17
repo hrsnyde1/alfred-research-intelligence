@@ -58,6 +58,8 @@ This was not tested with the real Photon SDK, the real line, or the live Memory 
 
 ## Owner steps (not performed; each needs your approval)
 
+The exact, copy-paste version for the first live test (Memory publishing off) is [RESEARCH_LINE_LIVE_TEST.md](RESEARCH_LINE_LIVE_TEST.md). It uses the one-time `discover` mode to learn the binding and `line_setup.py` to write both configs.
+
 1. **Binding values (nonsecret).** The Research line phone label, the conversation space ID and your sender ID on that line. The staged discovery tool (`staging/research-imessage-discovery-v1`) or the first transport test can reveal them.
 2. **Memory principal.** On the server, as the Memory owner, provision an **agent** principal `research-line` with a fresh token, and assign it task `research-line`. Use `MemoryStore.provision` / `assign` with the Alfred token; never paste tokens into chat. Write the token to `/etc/alfred-research-line/credentials/memory-token` (root, 0600).
 3. **Photon credentials.** Write the Research project ID and secret to `/etc/alfred-research-photon/credentials/research-project-id` and `research-project-secret` (root, 0600). They never pass through Research tooling.

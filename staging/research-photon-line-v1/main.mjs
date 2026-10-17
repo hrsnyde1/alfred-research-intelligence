@@ -5,10 +5,20 @@ import fs from 'node:fs';import path from 'node:path';
 import {Connector,credentialReader} from './connector.mjs';
 import {Outbox} from './outbox.mjs';
 const [mode,configPath,operationId]=process.argv.slice(2);
-if(!['run','send','health'].includes(mode)||!configPath)throw Error('usage: main.mjs run|health|send CONFIG [OPERATION_ID]');
+if(!['run','send','health','discover'].includes(mode)||!configPath)throw Error('usage: main.mjs run|health|send|discover CONFIG [OPERATION_ID]');
 const fd=fs.openSync(configPath,fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW);
 let p;
 try{const st=fs.fstatSync(fd);if(!st.isFile()||st.size>16384||(st.mode&0o022)||![0,process.getuid()].includes(st.uid))throw Error('policy denied');p=JSON.parse(fs.readFileSync(fd,'utf8'));}finally{fs.closeSync(fd);}
+if(mode==='discover'){
+ // One-time binding discovery; runs even while the line itself is disabled. No sends.
+ const hard=setTimeout(()=>process.exit(2),140000);
+ try{
+  const {Spectrum}=await import('spectrum-ts');const {imessage}=await import('spectrum-ts/providers/imessage');
+  const {discover}=await import('./discover.mjs');
+  const r=await discover(p,{factory:Spectrum,imessage,credentials:credentialReader(process.env.CREDENTIALS_DIRECTORY)});
+  clearTimeout(hard);console.log(JSON.stringify(r));process.exit(r.state==='DISCOVERED'?0:3);
+ }catch{console.error('Research discovery unavailable');process.exit(2);}
+}
 if(p.enabled!==true){console.log(JSON.stringify({state:'DISABLED',intake:'DISABLED'}));process.exit(0);}
 if(mode==='health'){
  const h=JSON.parse(fs.readFileSync(path.join(p.state_dir,'health.json'),'utf8'));
