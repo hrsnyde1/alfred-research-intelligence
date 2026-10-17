@@ -129,7 +129,8 @@ class ResearchEngine:
             report_path.write_text(report, encoding='utf-8')
             report_path.chmod(0o600)
             self.store.put(job_id, 'report', {'sha256': sha(report.encode()), 'path': str(report_path), 'text': report})
-            candidate = AuthoritativeMemoryAdapter().prepare(job_id, request, claims, sources, verification, sha(report.encode()))
+            candidate = AuthoritativeMemoryAdapter().prepare(job_id, request, claims, sources, verification, sha(report.encode()),
+                                                             corroboration.to_dict())
             if candidate:
                 self.store.put(job_id, 'memory-candidate', candidate)
                 (directory / 'memory-candidate.json').write_text(json.dumps(candidate, indent=2, ensure_ascii=False), encoding='utf-8')
