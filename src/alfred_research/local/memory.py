@@ -6,6 +6,7 @@ from pathlib import Path
 import stat
 from urllib.parse import urlsplit
 
+from .verify import VerificationResult
 from .workers import digest
 
 # Mirrors alfred-memory src/obsidian_candidate/routing.py (r59): approved records from the
@@ -27,6 +28,17 @@ class MemoryBlocked(RuntimeError):
     pass
 
 
+def withheld_claims(corroboration):
+    """Claim ids the corroboration stage found disputed or contradicted; these never reach Memory.
+
+    Jobs from before the corroboration stage have no artifact and keep source-support-only
+    selection. A malformed artifact raises rather than silently publishing everything.
+    """
+    if corroboration is None:
+        return set()
+    return set(VerificationResult.from_dict(corroboration).conflicts())
+
+
 class AuthoritativeMemoryAdapter:
     """Observed /v1/memory supports generic create/review, not Research promotion.
 
@@ -39,13 +51,13 @@ class AuthoritativeMemoryAdapter:
     blocker = ('Installed Memory has no authorized live Research candidate/promotion interface '
                'or independent attestation trust contract. No Memory write attempted.')
 
-    def prepare(self, job_id, request, claims, sources, verification, report_sha256):
+    def prepare(self, job_id, request, claims, sources, verification, report_sha256, corroboration=None):
         if verification.get('packet_sha256') != digest(claims):
             raise ValueError('Candidate packet differs from verified packet')
         rows = verification.get('assessments', [])
         if len(rows) != len(claims) or {r['claim_id'] for r in rows} != {c['claim_id'] for c in claims}:
             raise ValueError('Incomplete independent verification')
-        approved = {r['claim_id'] for r in rows if r['supported'] is True}
+        approved = {r['claim_id'] for r in rows if r['supported'] is True} - withheld_claims(corroboration)
         eligible = [c for c in claims if c['claim_id'] in approved and c['kind'] == 'source_statement']
         if not eligible:
             return None
@@ -134,12 +146,19 @@ class MemoryServicePublisher:
         rows = self.call(token, {'action': 'search', 'task_id': task_id, 'query': reference, 'limit': 4})
         return isinstance(rows, list) and any(isinstance(r, dict) and r.get('id') == memory_id for r in rows)
 
-    def publish(self, job_id, candidate, topic=DEFAULT_RESEARCH_TOPIC):
+    def publish(self, job_id, candidate, topic=DEFAULT_RESEARCH_TOPIC, exclude=()):
+        """``exclude``: claim ids withheld at publish time (disputed or contradicted by corroboration)."""
         AuthoritativeMemoryAdapter()._validate(candidate)
         task_id = research_task(topic)
-        sources = {s['source_id']: s for s in candidate['sources']}
+        sources, exclude = {s['source_id']: s for s in candidate['sources']}, set(exclude)
+        claims = [c for c in candidate['claims'] if c['claim_id'] not in exclude]
+        withheld = sorted(c['claim_id'] for c in candidate['claims'] if c['claim_id'] in exclude)
+        if not claims:
+            return {'status': 'nothing_to_publish', 'kind': self.kind, 'topic': topic, 'task_id': task_id, 'receipts': [],
+                    'withheld': withheld, 'candidate_sha256': candidate['candidate_sha256'],
+                    'detail': 'every finding was disputed or contradicted by independent sources; none sent to Memory'}
         token, receipts = self.token(), []
-        for claim in candidate['claims']:
+        for claim in claims:
             source = sources.get(claim['source_id'], {})
             location = next((e['location'] for e in source.get('evidence', []) if e['evidence_id'] == claim['evidence_id']),
                             claim['evidence_id']).split(':char')[0]
@@ -161,5 +180,5 @@ class MemoryServicePublisher:
         states = {r['review_state'] for r in receipts}
         status = 'published' if receipts and states == {'approved'} else ('pending_review' if receipts else 'nothing_to_publish')
         return {'status': status, 'kind': self.kind, 'topic': topic, 'task_id': task_id, 'receipts': receipts,
-                'candidate_sha256': candidate['candidate_sha256'],
+                'withheld': withheld, 'candidate_sha256': candidate['candidate_sha256'],
                 'detail': 'review_state read back with search after create; Memory create responses are not trusted for it.'}
