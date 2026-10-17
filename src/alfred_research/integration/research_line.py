@@ -18,7 +18,7 @@ import re
 import sys
 import time
 
-from ..local.memory import MemoryServicePublisher
+from ..local.memory import DEFAULT_RESEARCH_TOPIC, RESEARCH_KIND, RESEARCH_TOPICS, MemoryServicePublisher
 from .desk import ResearchDesk, short
 from .message_intake import detect
 
@@ -31,7 +31,7 @@ HELP_TEXT = ('Send me a link (article, PDF, DOCX, GitHub repo, YouTube video wit
              'question of at least three words and I\'ll research it and reply with cited findings{memory}. '
              '"status" lists recent jobs; "status <job>" shows one; add "again" to redo a link.')
 MEMORY_ON = ' and save verified findings to Alfred\'s Memory'
-MEMORY_OFF = ' (findings stay on the Research server; Memory publishing is off)'
+MEMORY_OFF = ' (findings are kept on the Research server; Memory publishing is off)'
 KEY = re.compile(r'^[0-9a-f]{64}$')
 
 
@@ -80,8 +80,11 @@ class ResearchLine(ResearchDesk):
         publisher = None
         memory = config.get('memory') or {}
         if memory.get('enabled') is True:
+            if 'task_id' in memory or memory.get('kind', RESEARCH_KIND) != RESEARCH_KIND:
+                raise ValueError('Memory task is per topic (research-line/<topic>) and kind is ' + RESEARCH_KIND +
+                                 '; remove memory.task_id and memory.kind from the config')
             token_file = memory['token_file'].replace('${CREDENTIALS_DIRECTORY}', os.environ.get('CREDENTIALS_DIRECTORY', ''))
-            publisher = MemoryServicePublisher(memory['url'], token_file, memory['task_id'], memory['kind'])
+            publisher = MemoryServicePublisher(memory['url'], token_file)
         super().__init__(data / 'research', deliver=self.send, provider=config.get('provider', 'auto'),
                          publisher=publisher, publish_extractive=memory.get('allow_extractive') is True, **options)
 
@@ -135,6 +138,8 @@ class ResearchLine(ResearchDesk):
             log.warning('Research line record %s ignored: binding mismatch', key[:12])
             return
         text = ((event.get('content') or {}).get('text') or '')[:20000]
+        # The connector already stripped the prefix; anything unrecognised files under General.
+        topic = research.get('topic') if research.get('topic') in RESEARCH_TOPICS else DEFAULT_RESEARCH_TOPIC
         reply = 'reply:' + key
         status = STATUS.match(text)
         if status:
@@ -146,7 +151,7 @@ class ResearchLine(ResearchDesk):
             return self.enqueue(reply, 'Nothing to research in that message. ' + self.help_text())
         route = {'project': 'research', 'line': self.binding['line'], 'space': self.binding['space'],
                  'sender': self.binding['sender'], 'message_id': research.get('originalMessageId'),
-                 'ledger_key': key, 'environment': 'personal'}
+                 'ledger_key': key, 'environment': 'personal', 'topic': topic}
         # Queue the acknowledgement before any job starts so it always precedes the result.
         self.deferred = []
         try:
@@ -157,14 +162,14 @@ class ResearchLine(ResearchDesk):
         for job_id in started:
             super().start(job_id)
 
+    def help_text(self):
+        return HELP_TEXT.format(memory=MEMORY_ON if self.publisher is not None else MEMORY_OFF)
+
     def start(self, job_id):
         if getattr(self, 'deferred', None) is not None:
             self.deferred.append(job_id)
         else:
             super().start(job_id)
-
-    def help_text(self):
-        return HELP_TEXT.format(memory=MEMORY_ON if self.publisher is not None else MEMORY_OFF)
 
     # ------------------------------------------------------------ service loop
 
