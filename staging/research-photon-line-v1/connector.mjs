@@ -52,12 +52,20 @@ export class Connector {
   health(){return {schema:'research.connector.health/1',state:this.state,intake:'DISABLED',projectRole:'research'};}
   async stop(){this.state='STOPPED';if(this.client)await this.client.stop();}
 }
+// Same rule as the tested discovery utility (research-imessage-discovery-v1/main.mjs):
+// systemd LoadCredential files may be root-owned and group-readable (0440); otherwise
+// only 0400/0600 owned by root or the dedicated service UID. No world, write or special bits.
+export function credentialMetadataAllowed(st, serviceUid) {
+  const mode=st.mode & 0o7777;
+  return [0,serviceUid].includes(st.uid) &&
+    ([0o400,0o600].includes(mode) || (st.uid === 0 && mode === 0o440));
+}
 // Protected references only; never consult Personal environment/configuration.
 export function credentialReader(directory) {
   return ()=>{
     const read=name=>{
       const p=path.join(directory,name),fd=fs.openSync(p,fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW);
-      try {const st=fs.fstatSync(fd);if(!st.isFile()||st.size>4096||(st.mode&0o077))throw Error('credential denied');
+      try {const st=fs.fstatSync(fd);if(!st.isFile()||st.size>4096||!credentialMetadataAllowed(st,process.getuid()))throw Error('credential denied');
         return fs.readFileSync(fd,'utf8').trim();}finally{fs.closeSync(fd);}
     };
     return {projectId:read('research-project-id'),projectSecret:read('research-project-secret')};

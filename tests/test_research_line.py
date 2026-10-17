@@ -243,6 +243,20 @@ class LineTests(unittest.TestCase):
         self.assertFalse(private_write(target, {'a': 2}))
         self.assertEqual(json.loads(target.read_text()), {'a': 1})
 
+    def test_help_text_follows_memory_setting(self):
+        self.assertIn('Memory publishing is off', self.line().help_text())
+        self.memory = FakeMemory()
+        self.assertIn('save verified findings to Alfred\'s Memory', self.line('development_lesson').help_text())
+
+    def test_cli_once_finishes_jobs_before_exiting(self):
+        config = self.root / 'config.json'
+        config.write_text(json.dumps(self.config()))
+        config.chmod(0o600)
+        key = self.inbound('https://example.org/retries')
+        with patch('alfred_research.local.sources.http_get', Responses(ROUTES)), patch('builtins.print'):
+            self.assertEqual(main(['once', str(config)]), 0)
+        self.assertEqual([r['operationId'] for r in self.outbox()], ['reply:' + key, 'final:' + key])
+
     def test_cli_disabled_and_check(self):
         config = self.root / 'config.json'
         config.write_text(json.dumps({**self.config(), 'enabled': False}))
@@ -268,6 +282,18 @@ class PublisherTests(unittest.TestCase):
             publisher = MemoryServicePublisher('http://127.0.0.1:9/v1/memory', token, 'research-line', 'research_finding')
             with self.assertRaisesRegex(MemoryBlocked, 'private'):
                 publisher.token()
+
+    def test_credential_metadata_matches_connector_rule(self):
+        from types import SimpleNamespace
+        from alfred_research.local.memory import credential_metadata_allowed
+        meta = lambda uid, mode: SimpleNamespace(st_uid=uid, st_mode=0o100000 | mode)
+        self.assertTrue(credential_metadata_allowed(meta(0, 0o440), 980))  # systemd LoadCredential
+        for uid in (0, 980):
+            for mode in (0o400, 0o600):
+                self.assertTrue(credential_metadata_allowed(meta(uid, mode), 980))
+        for uid, mode in ((980, 0o440), (981, 0o600), (0, 0o444), (0, 0o640), (0, 0o644), (980, 0o620), (0, 0o4400)):
+            with self.subTest(uid=uid, mode=oct(mode)):
+                self.assertFalse(credential_metadata_allowed(meta(uid, mode), 980))
 
     def test_tampered_candidate_rejected(self):
         publisher = MemoryServicePublisher('http://127.0.0.1:9/v1/memory', '/x', 'research-line', 'research_finding')

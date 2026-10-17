@@ -60,6 +60,13 @@ class AuthoritativeMemoryAdapter:
             raise ValueError('Candidate content changed after preparation')
 
 
+def credential_metadata_allowed(info, service_uid):
+    """Same rule as the Research connector: systemd LoadCredential files are root-owned 0440;
+    otherwise only 0400/0600 owned by root or the service UID."""
+    mode = stat.S_IMODE(info.st_mode)
+    return info.st_uid in (0, service_uid) and (mode in (0o400, 0o600) or (info.st_uid == 0 and mode == 0o440))
+
+
 class MemoryServicePublisher:
     """Publish verified findings to the installed Alfred Memory service (``POST /v1/memory``).
 
@@ -81,7 +88,7 @@ class MemoryServicePublisher:
 
     def token(self):
         info = os.stat(self.token_file, follow_symlinks=False)
-        if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077 or info.st_size > 4096:
+        if not stat.S_ISREG(info.st_mode) or not credential_metadata_allowed(info, os.getuid()) or info.st_size > 4096:
             raise MemoryBlocked('Memory credential file must be a private regular file')
         value = self.token_file.read_text().strip()
         if len(value) < 32:

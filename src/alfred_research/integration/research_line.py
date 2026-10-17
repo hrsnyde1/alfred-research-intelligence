@@ -28,8 +28,10 @@ OUTBOX_SCHEMA = 'research.outbox/1'
 STATUS = re.compile(r'^\s*(?:research\s+)?(?:status|jobs)(?:\s+(research-[0-9a-f]{32}))?\s*\??\s*$', re.I)
 HELP = re.compile(r'^\s*(help|\?|commands)\s*$', re.I)
 HELP_TEXT = ('Send me a link (article, PDF, DOCX, GitHub repo, YouTube video with captions, Instagram post) or a '
-             'question of at least three words and I\'ll research it, reply with cited findings and save verified '
-             'findings to Alfred\'s Memory. "status" lists recent jobs; "status <job>" shows one; add "again" to redo a link.')
+             'question of at least three words and I\'ll research it and reply with cited findings{memory}. '
+             '"status" lists recent jobs; "status <job>" shows one; add "again" to redo a link.')
+MEMORY_ON = ' and save verified findings to Alfred\'s Memory'
+MEMORY_OFF = ' (findings stay on the Research server; Memory publishing is off)'
 KEY = re.compile(r'^[0-9a-f]{64}$')
 
 
@@ -138,10 +140,10 @@ class ResearchLine(ResearchDesk):
         if status:
             return self.enqueue(reply, self.status_reply(status.group(1)))
         if HELP.match(text):
-            return self.enqueue(reply, HELP_TEXT)
+            return self.enqueue(reply, self.help_text())
         intent = detect(text, dedicated=True)
         if intent is None:
-            return self.enqueue(reply, 'Nothing to research in that message. ' + HELP_TEXT)
+            return self.enqueue(reply, 'Nothing to research in that message. ' + self.help_text())
         route = {'project': 'research', 'line': self.binding['line'], 'space': self.binding['space'],
                  'sender': self.binding['sender'], 'message_id': research.get('originalMessageId'),
                  'ledger_key': key, 'environment': 'personal'}
@@ -160,6 +162,9 @@ class ResearchLine(ResearchDesk):
             self.deferred.append(job_id)
         else:
             super().start(job_id)
+
+    def help_text(self):
+        return HELP_TEXT.format(memory=MEMORY_ON if self.publisher is not None else MEMORY_OFF)
 
     # ------------------------------------------------------------ service loop
 
@@ -188,7 +193,8 @@ def main(argv=None):
     if config.get('enabled') is not True:
         print(json.dumps({'state': 'DISABLED'}))
         return 0
-    line = ResearchLine(config)
+    # `once` exits after one poll, so its jobs must finish in the foreground, not on daemon threads.
+    line = ResearchLine(config, runner='inline' if args.command == 'once' else 'thread')
     if args.command == 'check':
         print(json.dumps({'state': 'READY', 'memory_publishing': line.publisher is not None,
                           'pending': sum(1 for _ in line.pending())}))
