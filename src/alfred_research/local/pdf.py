@@ -363,6 +363,10 @@ class Font:
                 self.parse_cmap(decode_stream(unicode_map, resolve) or b'')
             except (PDFError, ValueError):
                 self.cmap = {}
+        if subtype != 'Type0':
+            # Simple fonts always use one-byte codes, even when their ToUnicode
+            # CMap declares a two-byte codespace (common in Word exports).
+            self.width = 1
         if isinstance(encoding, dict):
             base = resolve(encoding.get('BaseEncoding'))
             code = None

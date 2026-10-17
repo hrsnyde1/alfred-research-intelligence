@@ -8,6 +8,20 @@ from urllib.parse import urlsplit
 
 from .workers import digest
 
+# Mirrors alfred-memory src/obsidian_candidate/routing.py (r59): approved records from the
+# research-fox principal, kind task_progress, on task research-line/<topic> export to
+# Alfred HQ Research/<Topic>/<uuid>.md. Fox tests/test_topics.py checks these against that file.
+RESEARCH_TOPICS = ('General', 'Taxes', 'Legal', 'Business', 'Personal')
+DEFAULT_RESEARCH_TOPIC = 'General'
+RESEARCH_KIND = 'task_progress'
+RESEARCH_TASK_PREFIX = 'research-line/'
+
+
+def research_task(topic):
+    if topic not in RESEARCH_TOPICS:
+        raise ValueError('Unknown Research topic')
+    return RESEARCH_TASK_PREFIX + topic.lower()
+
 
 class MemoryBlocked(RuntimeError):
     pass
@@ -72,19 +86,20 @@ class MemoryServicePublisher:
 
     Uses Memory's existing ``create`` action with a dedicated Research agent
     principal token read from a protected file; the token is never logged or
-    stored. One record per independently verified source statement. The
-    resulting review state is whatever Memory reports: auto-approval depends on
-    Memory's own rules for the configured kind, and nothing is called approved
-    unless Memory's response says so.
+    stored. One ``task_progress`` record per independently verified source
+    statement, on the job's topic task ``research-line/<topic>``. Memory's create
+    response is not trusted for the review state (it reports ``approved`` for any
+    duplicate, even when the earlier row is pending), so each record is approved
+    only if the agent's own ``search``, which returns approved rows only, finds it.
     """
-    def __init__(self, url, token_file, task_id, kind, *, timeout=10):
+    kind = RESEARCH_KIND
+
+    def __init__(self, url, token_file, *, timeout=10):
         parsed = urlsplit(url)
         if parsed.scheme != 'http' or parsed.hostname != '127.0.0.1' or parsed.path != '/v1/memory' or \
                 not parsed.port or parsed.query or parsed.username:
             raise ValueError('Memory URL must be http://127.0.0.1:PORT/v1/memory (loopback only)')
-        if not isinstance(task_id, str) or not task_id or not isinstance(kind, str) or not kind:
-            raise ValueError('Memory task_id and kind required')
-        self.port, self.token_file, self.task_id, self.kind, self.timeout = parsed.port, Path(token_file), task_id, kind, timeout
+        self.port, self.token_file, self.timeout = parsed.port, Path(token_file), timeout
 
     def token(self):
         info = os.stat(self.token_file, follow_symlinks=False)
@@ -110,12 +125,18 @@ class MemoryServicePublisher:
         except ValueError:
             result = {}
         if response.status != 200:
-            raise MemoryBlocked('Memory refused the record (HTTP ' + str(response.status) + ' ' +
-                                str(result.get('error', '')) + ')')
+            error = result.get('error', '') if isinstance(result, dict) else ''
+            raise MemoryBlocked('Memory refused the request (HTTP ' + str(response.status) + ' ' + str(error) + ')')
         return result
 
-    def publish(self, job_id, candidate):
+    def approved(self, token, task_id, memory_id, reference):
+        """True only if Memory shows this row to the agent, which it does for approved rows alone."""
+        rows = self.call(token, {'action': 'search', 'task_id': task_id, 'query': reference, 'limit': 4})
+        return isinstance(rows, list) and any(isinstance(r, dict) and r.get('id') == memory_id for r in rows)
+
+    def publish(self, job_id, candidate, topic=DEFAULT_RESEARCH_TOPIC):
         AuthoritativeMemoryAdapter()._validate(candidate)
+        task_id = research_task(topic)
         sources = {s['source_id']: s for s in candidate['sources']}
         token, receipts = self.token(), []
         for claim in candidate['claims']:
@@ -123,20 +144,22 @@ class MemoryServicePublisher:
             location = next((e['location'] for e in source.get('evidence', []) if e['evidence_id'] == claim['evidence_id']),
                             claim['evidence_id']).split(':char')[0]
             title = (source.get('metadata') or {}).get('title')
+            reference = 'Research job ' + job_id + ', claim ' + claim['claim_id'] + '.'
             content = '\n'.join(filter(None, [
                 'Research finding: ' + claim['statement'],
                 'Source: ' + ((title + ' - ') if title else '') + source.get('locator', '?') + ' (' + location + '), retrieved ' +
                 str(source.get('acquired_at', '?')) + '.',
                 'Verification: exact quotation checked against the saved source; not independently corroborated.',
-                'Research job ' + job_id + ', claim ' + claim['claim_id'] + '.']))[:4096]
-            result = self.call(token, {'action': 'create', 'task_id': self.task_id, 'kind': self.kind, 'content': content,
+                reference]))[:4096]
+            result = self.call(token, {'action': 'create', 'task_id': task_id, 'kind': self.kind, 'content': content,
                                        'source_message_id': 'research:' + job_id + ':' + claim['claim_id']})
-            if result.get('saved') is not True or not isinstance(result.get('id'), str):
+            if not isinstance(result, dict) or result.get('saved') is not True or not isinstance(result.get('id'), str):
                 raise MemoryBlocked('Memory did not confirm the record was saved')
-            receipts.append({'claim_id': claim['claim_id'], 'memory_id': result['id'],
-                             'review_state': result.get('review_state'), 'duplicate': bool(result.get('duplicate'))})
+            state = 'approved' if self.approved(token, task_id, result['id'], reference) else 'not_approved'
+            receipts.append({'claim_id': claim['claim_id'], 'memory_id': result['id'], 'review_state': state,
+                             'reported_state': result.get('review_state'), 'duplicate': bool(result.get('duplicate'))})
         states = {r['review_state'] for r in receipts}
         status = 'published' if receipts and states == {'approved'} else ('pending_review' if receipts else 'nothing_to_publish')
-        return {'status': status, 'kind': self.kind, 'task_id': self.task_id, 'receipts': receipts,
+        return {'status': status, 'kind': self.kind, 'topic': topic, 'task_id': task_id, 'receipts': receipts,
                 'candidate_sha256': candidate['candidate_sha256'],
-                'detail': 'Memory create responses; review_state as reported by Memory.'}
+                'detail': 'review_state read back with search after create; Memory create responses are not trusted for it.'}

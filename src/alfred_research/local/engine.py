@@ -6,21 +6,31 @@ from pathlib import Path
 import subprocess
 import sys
 
+from .claude_provider import ClaudeProvider, resolve_settings, status as claude_status
+from .director import direct, investigate, render_intelligence, synthesize
 from .memory import AuthoritativeMemoryAdapter
 from .sources import acquire, discover, sha, UnsupportedSource
 from .store import JobStore
+from .verify import run_stage as corroborate
 from .workers import codex_available, digest, plan, research
 
 
 class ResearchEngine:
-    def __init__(self, root='data/research-v1'):
+    def __init__(self, root='data/research-v1', *, claude=None, claude_client=None):
         self.store = JobStore(root)
+        # claude: the Research line's ``claude`` config block; claude_client: injected SDK client (tests).
+        self.claude_config, self.claude_client = claude, claude_client
+
+    def claude_status(self):
+        if self.claude_client is not None:
+            return {'provider': 'claude', 'configured': True, 'detail': 'injected client'}
+        return claude_status(resolve_settings(self.claude_config))
 
     def submit(self, objective, sources=(), *, article=None, provider='auto', request_key=None):
         if not isinstance(objective, str) or not 1 <= len(objective.strip()) <= 8000:
             raise ValueError('Objective must be 1–8000 characters')
-        if provider not in ('auto', 'codex', 'extractive'):
-            raise ValueError('Provider must be auto, codex, or extractive')
+        if provider not in ('auto', 'claude', 'codex', 'extractive'):
+            raise ValueError('Provider must be auto, claude, codex, or extractive')
         if len(sources) > 4 or any(not isinstance(s, str) or not 0 < len(s) <= 2048 for s in sources):
             raise ValueError('At most four bounded source URLs/files')
         if article is not None and (not isinstance(article, str) or not 1 <= len(article.encode()) <= 1_000_000):
@@ -58,8 +68,20 @@ class ResearchEngine:
         try:
             directory.mkdir(mode=0o700)
             provider = request['provider']
-            if provider == 'auto':
-                provider = 'codex' if codex_available() else 'extractive'
+            claude = None
+            if provider in ('auto', 'claude'):
+                state = self.claude_status()
+                if state['configured']:
+                    provider = 'claude'
+                    claude = ClaudeProvider(resolve_settings(self.claude_config), self.claude_client)
+                elif provider == 'claude':
+                    # Fail closed: no silent downgrade to the no-model worker.
+                    self.store.put(job_id, 'provider-status', state)
+                    self.store.update(job_id, 'provider_not_configured', state['detail'] +
+                                      '. Nothing was researched; configure the key file or resubmit with provider extractive.')
+                    return self.store.get(job_id)
+                else:
+                    provider = 'codex' if codex_available() else 'extractive'
             locators = list(request['sources'])
             if request['article'] is not None:
                 article = directory / 'submitted-article.txt'
@@ -95,17 +117,36 @@ class ResearchEngine:
                 return self.store.get(job_id)
             self.store.update(job_id, 'planning', 'Research Director assigning source workers and separate verifier')
             assignment = plan(request['objective'], sources, provider)
+            investigations = []
+            if claude:
+                directions = [direct(claude, request['objective'], source) for source in sources]
+                assignment['director'] = 'claude-research-director'
+                assignment['models'] = {'research': claude.settings.research_model, 'synthesis': claude.settings.synthesis_model}
+                assignment['directions'] = directions
+                assignment['assignments'] = [{'worker': 'specialist-' + i['role'], **i} for d in directions for i in d['investigations']]
             self.store.put(job_id, 'plan', assignment)
             self.store.update(job_id, 'researching', 'Executing ' + provider + ' source workers')
             drafts, claims, recommendations, limitations = [], [], [], []
-            for source in sources:
-                draft = research(request['objective'], source, provider)
-                drafts.append(draft)
-                for item in draft['claims']:
-                    claims.append({**item, 'claim_id': 'C' + str(len(claims) + 1),
-                                   'source_id': source['source_id'], 'researcher': draft['worker']})
-                recommendations.extend(draft['recommendations'])
-                limitations.extend(draft['limitations'])
+            if claude:
+                by_id = {s['source_id']: s for s in sources}
+                for item in assignment['assignments']:  # sequential, one specialist call at a time
+                    record = investigate(claude, request['objective'], item, by_id[item['source_id']])
+                    investigations.append(record)
+                    for finding in record['findings']:
+                        claims.append({**finding, 'claim_id': 'C' + str(len(claims) + 1), 'source_id': item['source_id'],
+                                       'researcher': 'specialist-' + item['role']})
+                    recommendations.extend(record['recommendations'])
+                    limitations.extend(record['limitations'])
+                drafts = investigations
+            else:
+                for source in sources:
+                    draft = research(request['objective'], source, provider)
+                    drafts.append(draft)
+                    for item in draft['claims']:
+                        claims.append({**item, 'claim_id': 'C' + str(len(claims) + 1),
+                                       'source_id': source['source_id'], 'researcher': draft['worker']})
+                    recommendations.extend(draft['recommendations'])
+                    limitations.extend(draft['limitations'])
             self.store.put(job_id, 'research', {'drafts': drafts, 'claims': claims})
             self.store.update(job_id, 'verifying', 'Independent worker checking pinned snapshots and claim support')
             payload = {'sources': sources, 'claims': claims, 'provider': provider, 'recommendations': recommendations}
@@ -119,8 +160,25 @@ class ResearchEngine:
             if verification['packet_sha256'] != digest(claims) or verification['pid'] == os.getpid():
                 raise ValueError('Verification packet/process binding mismatch')
             self.store.put(job_id, 'verification', verification)
+            # Fact verification: separate process discovers independent sources per claim.
+            corroboration = corroborate(sources, claims, verification['assessments'], directory / 'corroboration')
+            self.store.put(job_id, 'corroboration', corroboration.to_dict())
             self.store.update(job_id, 'synthesizing', 'Generating source-cited report and pending candidate')
-            report = render(job_id, request, sources, claims, recommendations, limitations, failures, verification, provider, discovery)
+            report = None
+            if claude:
+                try:
+                    synthesis = synthesize(claude, request, sources, claims, investigations, verification)
+                    self.store.put(job_id, 'synthesis', synthesis)
+                    self.store.put(job_id, 'telegram-summary', {'text': synthesis['telegram_summary'], 'chars': len(synthesis['telegram_summary'])})
+                    report = render_intelligence(job_id, request, sources, claims, investigations, verification, synthesis,
+                                                 failures, discovery, claude.settings)
+                except Exception as error:
+                    # Findings are already verified; fall back to the deterministic report rather than lose them.
+                    limitations.append('Model synthesis failed (' + type(error).__name__ + ': ' + str(error)[:200] +
+                                       '); deterministic report shown instead.')
+                    self.store.put(job_id, 'synthesis', {'status': 'failed', 'error': type(error).__name__ + ': ' + str(error)[:300]})
+            if report is None:
+                report = render(job_id, request, sources, claims, recommendations, limitations, failures, verification, provider, discovery)
             report_path = directory / 'report.md'
             report_path.write_text(report, encoding='utf-8')
             report_path.chmod(0o600)
@@ -131,7 +189,8 @@ class ResearchEngine:
                 (directory / 'memory-candidate.json').write_text(json.dumps(candidate, indent=2, ensure_ascii=False), encoding='utf-8')
                 (directory / 'memory-candidate.json').chmod(0o600)
             accepted = [a for a in verification['assessments'] if a['supported']]
-            complete = bool(claims) and len(accepted) == len(claims) and not failures and verification['recommendations_supported'] is True
+            complete = bool(claims) and len(accepted) == len(claims) and not failures and verification['recommendations_supported'] is True \
+                and not corroboration.conflicts()
             self.store.update(job_id, 'completed' if complete else 'needs_more_research',
                               'Report stored; Memory promotion blocked pending authoritative interface', report_path=str(report_path))
         except KeyboardInterrupt:
@@ -152,7 +211,8 @@ def render(job_id, request, sources, claims, recommendations, limitations, failu
     refs = {e['evidence_id']: (s, e) for s in sources for e in s['evidence']}
     lines = ['# Alfred Research & Intelligence', '', 'Job: `' + job_id + '`', '',
              'Objective: ' + request['objective'], '',
-             'Execution: real acquisition and ' + ('configured Codex model workers' if provider == 'codex' else 'deterministic extractive workers (no LLM)') + '.', '',
+             'Execution: real acquisition and ' + {'codex': 'configured Codex model workers', 'claude': 'Claude model workers'}.get(
+                 provider, 'deterministic extractive workers (no LLM)') + '.', '',
              'Verification: separate worker process; source support checked against pinned byte snapshots. '
              'This establishes what the sources support, not independent real-world truth.', '', '## Findings', '']
     for claim in claims:

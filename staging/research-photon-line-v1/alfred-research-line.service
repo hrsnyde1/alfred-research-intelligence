@@ -17,6 +17,8 @@ UMask=0077
 WorkingDirectory=/opt/alfred-research-line/v1
 # Phase B (Memory publishing): uncomment after the Memory token file exists; systemd refuses to start if it is missing.
 #LoadCredential=memory-token:/etc/alfred-research-line/credentials/memory-token
+# Claude provider: uncomment after the key file exists (root 0400/0440); then set "provider": "claude" or "auto".
+#LoadCredential=anthropic-api-key:/etc/alfred-research-line/credentials/anthropic-api-key
 ExecStart=/usr/bin/python3 -B /opt/alfred-research-line/v1/scripts/research_line.py run /etc/alfred-research-line/config.json
 Restart=on-failure
 RestartSec=30
