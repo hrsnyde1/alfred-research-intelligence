@@ -18,8 +18,10 @@ IN_PROGRESS = ('collecting', 'planning', 'researching', 'verifying', 'synthesizi
 OWNER_STATUS = {'queued': 'accepted', 'collecting': 'running', 'planning': 'running', 'researching': 'running',
                 'verifying': 'running', 'synthesizing': 'running', 'completed': 'completed', 'failed': 'failed',
                 'needs_more_research': 'partially completed', 'unsupported': 'unsupported source',
-                'needs_sources': 'needs sources', 'interrupted': 'interrupted'}
-RETRYABLE = ('failed', 'unsupported', 'interrupted', 'needs_sources')
+                'needs_sources': 'needs sources', 'interrupted': 'interrupted',
+                'provider_not_configured': 'provider not configured'}
+RETRYABLE = ('failed', 'unsupported', 'interrupted', 'needs_sources', 'provider_not_configured')
+MODEL_MODES = ('codex', 'claude')
 DEDUPE_WINDOW = timedelta(hours=24)
 
 
@@ -30,10 +32,10 @@ def short(text, limit):
 
 class ResearchDesk:
     def __init__(self, working_directory, *, deliver=None, provider='auto', runner='thread', max_concurrent=2,
-                 clock=None, publisher=None, publish_extractive=False):
+                 clock=None, publisher=None, publish_extractive=False, claude=None, claude_client=None):
         if runner not in ('thread', 'inline'):
             raise ValueError('runner must be thread or inline')
-        self.engine = ResearchEngine(working_directory)
+        self.engine = ResearchEngine(working_directory, claude=claude, claude_client=claude_client)
         self.deliver, self.provider, self.runner, self.publisher = deliver, provider, runner, publisher
         # Owner decision 2026-10-16: no-model (extractive) quotes are not auto-published to Memory.
         self.publish_extractive = publish_extractive is True
@@ -91,7 +93,7 @@ class ResearchDesk:
         """Send verified findings to Alfred Memory once; the receipt is stored with the job."""
         if self.publisher is None or PUBLICATION_ARTIFACT in job['artifacts'] or 'memory-candidate' not in job['artifacts']:
             return job
-        if job['artifacts'].get('plan', {}).get('mode') != 'codex' and not self.publish_extractive:
+        if job['artifacts'].get('plan', {}).get('mode') not in MODEL_MODES and not self.publish_extractive:
             record = {'status': 'skipped', 'receipts': [],
                       'detail': 'findings came from the no-model extractive worker; configure a model provider to publish'}
             self.engine.store.put(job['id'], PUBLICATION_ARTIFACT, record)
@@ -189,10 +191,11 @@ def final_message(job):
     """Message-friendly summary; the full cited report stays with the job."""
     artifacts, status = job['artifacts'], job['status']
     objective = short(job['request']['objective'], 120)
-    if status in ('failed', 'unsupported', 'needs_sources', 'interrupted') or 'report' not in artifacts:
+    if status in ('failed', 'unsupported', 'needs_sources', 'interrupted', 'provider_not_configured') or 'report' not in artifacts:
         failures = artifacts.get('acquisition-failures') or []
         reason = '; '.join(short(f['error'].split(': ', 1)[-1], 220) for f in failures[:2]) or short(job.get('error') or job['events'][-1]['detail'], 220)
-        outcome = {'unsupported': 'stopped: unsupported source', 'needs_sources': 'stopped: needs sources'}
+        outcome = {'unsupported': 'stopped: unsupported source', 'needs_sources': 'stopped: needs sources',
+                   'provider_not_configured': 'stopped: provider not configured'}
         return ('Research ' + outcome.get(status, OWNER_STATUS.get(status, status)) + ' (job ' + job['id'] + '): ' + reason +
                 '\nNothing was inferred or reported as findings.')
     sources = [v for k, v in sorted(artifacts.items()) if k.startswith('source-')]
@@ -201,6 +204,11 @@ def final_message(job):
     supported = [c for c in claims if assessments.get(c['claim_id'])]
     header = 'Research complete' if status == 'completed' else 'Research partially completed'
     lines = [header + ': ' + objective]
+    brief = (artifacts.get('telegram-summary') or {}).get('text')
+    if brief:  # model synthesis summary (<= 600 chars); citations and verification live in the full report
+        lines += [brief, str(len(supported)) + ' of ' + str(len(claims)) + ' findings source-supported (not independently corroborated).',
+                  memory_line(job), 'Full report: research status ' + job['id']]
+        return '\n'.join(lines)
     for source in sources:
         title = source.get('metadata', {}).get('title') or source['locator']
         lines.append('Source ' + source['source_id'] + ': ' + short(title, 100) + ' [' + source.get('content_basis', 'text') + ']')
