@@ -1,0 +1,22 @@
+{
+  "tests/compatibility-corrections.test.mjs": {
+    "bytes": 13185,
+    "sha256": "4d2acffc3d71aee53b61ee2e3ffcdf5ba71d11197b51672e90a98f3b5a871d0c"
+  },
+  "tests/test_guard.py": {
+    "bytes": 11067,
+    "sha256": "067c3b6221f1f7ea647a246e95c8f1b19eaf786b7c75d79877b15b350de9d5ec"
+  },
+  "tests/research-project.test.mjs": {
+    "bytes": 5522,
+    "sha256": "963d4088fcfe35917ef5528a7513085ef2877cc13d54313deca2c09ecc782cf9"
+  },
+  "tests/sdk-source.test.mjs": {
+    "bytes": 1154,
+    "sha256": "026b80cf4604873574111f6aeae8c3c97b8b0bd9dc4d4079c148a3574a68dc8a"
+  },
+  "tests/fixtures/pre-correction-index.mjs": {
+    "bytes": 52149,
+    "sha256": "e3b2577037cf602012bbd6ab70b58a2e21ecde4fb4d4704013040c7363003ca2"
+  }
+}

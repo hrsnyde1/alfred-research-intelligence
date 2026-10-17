@@ -1,0 +1,40 @@
+# PROPOSED ONLY. Requires owner-created isolated UID, frozen runtime/SDK mounts,
+# approved nonsecret policy and separately provisioned systemd credentials.
+[Unit]
+Description=Research-only Photon connector (bounded initial session)
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=simple
+User=alfredresearchphoton
+Group=alfredresearchphoton
+StateDirectory=alfredresearch-photon
+StateDirectoryMode=0700
+UMask=0077
+WorkingDirectory=/opt/alfred-research-photon/v1
+LoadCredential=research-project-id:/etc/alfred-research-photon/credentials/research-project-id
+LoadCredential=research-project-secret:/etc/alfred-research-photon/credentials/research-project-secret
+ExecStart=/usr/bin/flock -n /var/lib/alfredresearch-photon/connector.lock /home/alfred/.hermes/tools/node-26.7.0-linux-x64/bin/node /opt/alfred-research-photon/v1/main.mjs run /etc/alfred-research-photon/policy.json
+Restart=no
+RuntimeMaxSec=310
+TimeoutStopSec=5
+KillMode=control-group
+MemoryMax=1G
+CPUQuota=50%
+TasksMax=64
+LimitNOFILE=256
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=tmpfs
+PrivateTmp=yes
+ProtectProc=invisible
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+BindReadOnlyPaths=/home/alfred/.hermes/tools/node-26.7.0-linux-x64
+# Future reviewed nonsecret SDK dependency closure mounted at local node_modules.
+BindReadOnlyPaths=/home/alfred/.hermes/hermes-agent/plugins/platforms/photon/sidecar/node_modules:/opt/alfred-research-photon/v1/node_modules
+ReadWritePaths=/var/lib/alfredresearch-photon
+# SDK diagnostics may include identifiers. Health is an allowlisted file instead.
+StandardOutput=null
+StandardError=null
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,7 @@
+{
+  "alfred-research-photon-canary.service": "90ac117c8b64c0d7afdbff9fd2335f3bee8a059569aad820f645dd2ff6a8defb",
+  "alfred-research-photon.service": "c56765b234a1986f817768d6a05960dcb5b8a5b9c27c433d3c4c155c45032032",
+  "connector.mjs": "ad4c96df541dae51dcc0403cc13ffed1fe6f6596ce580cd34e830951ca77b9cf",
+  "main.mjs": "701effc123e997ac6b328921b51f89117aa4f4742ade6de23daa500f8db5aba9",
+  "research-project.mjs": "ea65df22546e19233bb79e976aaf366470fb3fb5d197c1c40c006a9aa9cb6e96"
+}

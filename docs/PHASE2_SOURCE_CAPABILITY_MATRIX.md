@@ -1,0 +1,36 @@
+# Phase 2 source capability matrix
+
+All behavior below is offline. SUPPORTED_FETCHED describes successfully extracted supplied snapshot content, not a live URL fetch. Every result labels fixture versus user-supplied origin. Tests listed are executed methods in `tests/test_sources.py`; the corrected full suite passed 125 tests (all prior 115 plus 10 targeted regressions).
+
+| Source | Implemented extraction | Fixture-only behavior | Unsupported content | Required future integrations | Executed tests |
+|---|---|---|---|---|---|
+| GitHub repositories/skills | Local read-only file inventory; traversal omissions explicitly PARTIAL/ERROR with path/reason; full-file hashes; line citations; separate SKILL.md/named JSON capabilities; JSON validation; advisory injection/script/path/symlink/submodule/license/network/secret/runtime flags | Supplied commit IDs are syntax-checked; directory fixtures require Director grants under configured environment roots | Remote Git fetch/clone, archives, submodule fetching, imported code execution; YAML semantic validation; exhaustive dependency/license/runtime verification | Approved GitHub access, immutable object/tree pin validation, license policy, bounded staging/retention and host permissions | `test_multi_skill_repository_independent_capabilities`, `test_repository_security_flags_and_scripts_never_execute`, `test_unsafe_paths_and_symlinks_are_not_extracted`, `test_license_and_manifest_limitations`, `test_missing_changed_and_invalid_repository_revisions`, local directory tests |
+| Websites/articles | Ordinary HTML text; line/column citations; meta author/publisher/date/canonical identity; conflicting metadata omitted; relative canonical references resolved against validated original URL; invalid canonical metadata omitted while retaining body | Supplied HTML and metadata; conservative PARTIAL extraction | Live HTTP, browser/JS rendering, paywalls/auth bypass, linked resource fetching, complete visual visibility determination | Authorized transport, content-type/encoding policy, DNS pinning, redirect/SSRF enforcement, quotas and retrieval receipts | `test_html_ignores_script_style_and_preserves_locations`, `test_html_structured_metadata_extracted_and_conflicts_not_guessed`, `test_author_publisher_dates_and_canonical_identity` |
+| Text documents | UTF-8 TXT/MD/CSV/VTT/SRT line extraction and raw-byte hashes | Supplied bytes; no arbitrary file-path reader | DOCX/DOC/ODT, images/OCR, binary and non-UTF8 encodings | Authorized file broker, format-specific verified parsers and limits | `test_document_supported_text_and_unsupported_formats`, `test_invalid_binary_and_empty_documents_report_partial` |
+| PDFs | Explicit adapter, file inventory and UNSUPPORTED outcome | Synthetic PDF bytes only | All PDF page/text/layout/OCR extraction; no parser configured | Separately verified/authorized parser, sandbox and malformed/large/encrypted PDF cases | `test_pdf_is_explicitly_unsupported_without_parser` |
+| YouTube | Supplied transcript.txt, captions.vtt/captions.srt with line citations | Metadata, access restrictions and user-supplied transcript provenance; no live viewing | Audio/video download, decoding, speech recognition or unavailable transcript fabrication | Legitimate metadata/transcript provider, rights/auth/rate limits and timing/receipt contract | `test_all_source_categories_and_environments`, `test_user_supplied_transcript_provenance`, media/blocked tests below |
+| Instagram | Supplied post.txt, transcript.txt/captions.vtt | Authorized synthetic metadata/post/caption/restriction inputs | Real account/API access, private media, video decoding/transcription | Approved platform API/permissions, content rights and retrieval limits | All-category test; media/blocked tests below |
+| TikTok | Supplied post.txt, transcript.txt/captions.vtt | Authorized synthetic metadata/post/caption/restriction inputs | Real account/API access, private media, video decoding/transcription | Approved platform provider/permissions, content rights and transcript availability | All-category test; media/blocked tests below |
+| X posts/threads | Supplied post.txt/thread.txt; ordered line text and citations | Synthetic post/thread snapshot and access outcome; no thread crawling | Live API, protected posts, linked-content discovery, independently verified per-post authors/timestamps | Approved X API/provider, complete thread pagination/identity and access/rate-limit receipts | All-category test; media/blocked tests below |
+
+Cross-platform executed coverage:
+
+- `test_each_blocked_outcome_extracts_no_content`: AUTH_REQUIRED/INACCESSIBLE/UNSUPPORTED/ERROR for eight source kinds.
+- `test_media_metadata_only_never_invents_transcripts`, `test_raw_media_not_watched_or_transcribed`: YouTube, Instagram, TikTok and X retain honest unavailable content.
+- `test_all_source_categories_and_environments`: all nine source kinds across Personal Alfred, Gabos, Fintra and SC Products (36 subcases, not extra test methods).
+- `test_every_cross_environment_pair_and_principal_denied`, `test_local_fixture_roots_are_environment_isolated`, `test_single_source_request_forgery_and_prompt_scope`: scoped authority, local paths, one-source requests and source-text identity forgery.
+- `test_unissued_changed_revoked_permission_and_origin_denied`: copied/edited/revoked grants and origin escalation.
+- `test_malformed_fixture_contracts_rejected`, `test_oversized_inputs_rejected_before_extraction`, `test_output_and_work_limits_accounted`, `test_timeout_is_explicit`: bounded input/output/resource handling.
+- `test_result_contract_rejects_dangling_or_mixed_evidence`, `test_snapshot_digest_covers_all_provenance`, `test_result_roundtrip_hash_and_determinism`, `test_no_persisted_effects_and_reordered_files_same_snapshot`: provenance integrity and side-effect-free replay.
+- `test_future_network_policy_is_pure_and_rejects_private_addresses`: inactive network design checks; no live transport guarantee.
+
+An advisory security flag is not a verified threat verdict. Source metadata is attributed data, not authenticated publication evidence. No adapter authorizes skill installation, Memory promotion or model execution.
+
+
+## Targeted correction coverage
+
+`tests/test_source_corrections.py` adds 10 passing methods. The exact independent-review reproductions (`test_review_reproduction_unreadable_subtree_reports_partial` and `test_review_reproduction_root_relative_canonical_preserves_body`) also passed separately after final changes.
+
+GitHub traversal: controlled EACCES and EIO, actual unreadable subtree with permission-independent fallback, propagated scandir errors, deterministic replay, source identity preservation and ERROR when no useful evidence remains. No path/symlink/execution or environment boundary was relaxed.
+
+HTML canonical identity: root/path/parent/query/network-path relative and absolute references, safe original URL requirement, missing metadata, and invalid/disallowed metadata with body/digest/provenance retention. Private literal IPs/local hostnames, unsafe schemes, credentials and ports remain disallowed; unresolved DNS/actual peer checks still belong to future transport, which remains inactive. No PDF, live media/provider or Linux capability changed.

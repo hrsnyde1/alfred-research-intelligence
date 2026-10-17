@@ -1,0 +1,9 @@
+(version 1)
+(allow default)
+(deny network*)
+(deny file-read* (subpath "/Users/haydensnyder"))
+(allow file-read* (subpath "/Users/haydensnyder/Git/alfred-research-intelligence/staging/photon-linux-compatibility-v1") (subpath "/Users/haydensnyder/.local/node24"))
+(deny file-write*)
+(allow file-write* (subpath "/Users/haydensnyder/Git/alfred-research-intelligence/staging/photon-linux-compatibility-v1/tmp") (literal "/dev/null"))
+
+(allow file-read-metadata (literal "/Users/haydensnyder") (literal "/Users/haydensnyder/Git") (literal "/Users/haydensnyder/Git/alfred-research-intelligence") (literal "/Users/haydensnyder/Git/alfred-research-intelligence/staging") (literal "/Users/haydensnyder/.local"))

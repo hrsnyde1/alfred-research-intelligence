@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "alfred-research"
+version = "0.1.0"
+description = "Alfred Research V1 local pipeline and offline integration contracts"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+alfred-research = "alfred_research.local.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

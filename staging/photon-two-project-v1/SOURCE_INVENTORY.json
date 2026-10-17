@@ -1,0 +1,56 @@
+[
+  {
+    "file": "gateway/photon_research.py",
+    "original_sha256": null,
+    "modified_sha256": "4aba0fdf6ed2b45ae5c401255e8d9d759e78e1bd2e4e38c7fbc4c63ccab5ee14",
+    "changed": true
+  },
+  {
+    "file": "gateway/run_inbound.py",
+    "original_sha256": "6a1a40708075e3550a824eae5519e98db97f52ea7995154e8c7e941de4e02144",
+    "modified_sha256": "89c3cf4daa0a04473d6302bf53f20b6d3839bd4960f0bc70674c27b9c429b018",
+    "changed": true
+  },
+  {
+    "file": "plugins/platforms/photon/adapter.py",
+    "original_sha256": "841ed6cb6e2d392fcec33f8983dd34fffe677c6a8d40e442bc449e66beeb16e5",
+    "modified_sha256": "540288fed36df43cb2e3049a1e46b94b1ddb0e94a4e8efad3f947e4f389e64c1",
+    "changed": true
+  },
+  {
+    "file": "plugins/platforms/photon/sidecar/caller-bindings.mjs",
+    "original_sha256": null,
+    "modified_sha256": "1bafa6bb31376fcdf5cf237003555fc7ba7d289711bcc192335ed565232075bf",
+    "changed": true
+  },
+  {
+    "file": "plugins/platforms/photon/sidecar/index.mjs",
+    "original_sha256": "ef019d1d50e4ca680aede49276181f8eff8d396d9b7c22a73bb5da2b2d7bb8e4",
+    "modified_sha256": "2ac209c3864cf4165d55fbfff7ffa9e29d9a43b010d35937bc08ea51c73082ba",
+    "changed": true
+  },
+  {
+    "file": "plugins/platforms/photon/sidecar/research-lifecycle.mjs",
+    "original_sha256": null,
+    "modified_sha256": "6ae5e27a677cc6df9c2065e73ce727ccf11174c8a915d29134792fbe3df089dc",
+    "changed": true
+  },
+  {
+    "file": "plugins/platforms/photon/sidecar/research-project.mjs",
+    "original_sha256": null,
+    "modified_sha256": "ea65df22546e19233bb79e976aaf366470fb3fb5d197c1c40c006a9aa9cb6e96",
+    "changed": true
+  },
+  {
+    "file": "plugins/platforms/photon/sidecar/research-worker.mjs",
+    "original_sha256": null,
+    "modified_sha256": "98ac1071ae1c06d0cba0e31bde819cec5288fe16cb577479c9862a6c8bf501a7",
+    "changed": true
+  },
+  {
+    "file": "plugins/platforms/photon/sidecar/send-format.mjs",
+    "original_sha256": "827c6c0b3a7fd3b731365ecd17bb52d65b05c9a53e67795922ec2ebb79de58fe",
+    "modified_sha256": "827c6c0b3a7fd3b731365ecd17bb52d65b05c9a53e67795922ec2ebb79de58fe",
+    "changed": false
+  }
+]

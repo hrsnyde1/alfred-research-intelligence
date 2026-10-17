@@ -1,0 +1,138 @@
+{
+  "schema": "research.local.demonstration/1",
+  "real_execution": true,
+  "mock_provider": false,
+  "job_id": "research-2e9ce7516adc428db125fd20e09958e7",
+  "status": "completed",
+  "source": {
+    "locator": "https://www.rfc-editor.org/rfc/rfc9110.txt",
+    "sha256": "21c1cdce6ab0e5509b04d84a28000836c7a087cf786efe6f04877ebfff47232a",
+    "bytes": 502941,
+    "acquired_at": "2026-10-17T00:00:58Z",
+    "provenance": {
+      "origin": "live_https",
+      "requested_url": "https://www.rfc-editor.org/rfc/rfc9110.txt",
+      "final_url": "https://www.rfc-editor.org/rfc/rfc9110.txt",
+      "redirects": [
+        {
+          "url": "https://www.rfc-editor.org/rfc/rfc9110.txt",
+          "status": 200
+        }
+      ],
+      "content_type": "text/plain"
+    }
+  },
+  "report_path": "/Users/haydensnyder/Git/alfred-research-intelligence/data/research-v1/research-2e9ce7516adc428db125fd20e09958e7/report.md",
+  "report_sha256": "2420478a92b396d9057034be5783b73dd2185915c4d9bb76a52920c315741fed",
+  "fresh_cli_retrieval_verified": true,
+  "research_provider_executions": [
+    {
+      "provider": "configured-codex-cli",
+      "started_at_unix": 1792195258,
+      "duration_ms": 14361,
+      "exit_code": 0,
+      "prompt_sha256": "5fe730c8fd184c3f719fd00812b0a34a1a6a238763c2275d7895c6d6089220b7",
+      "output_sha256": "a87a03df1cd8845f7744bf09c2b8b6d9d282fa5be2c1e4546bd00f57935e9aed",
+      "simulation": false,
+      "authority": "Local execution evidence only",
+      "session_id": "01a14729-68d7-7230-96be-13e99eee7f04",
+      "usage": {
+        "input_tokens": 28933,
+        "cached_input_tokens": 0,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 659,
+        "reasoning_output_tokens": 134
+      }
+    }
+  ],
+  "verification": {
+    "worker": "independent-verification-worker",
+    "pid": 17562,
+    "provider": "codex",
+    "execution": {
+      "provider": "configured-codex-cli",
+      "started_at_unix": 1792195272,
+      "duration_ms": 5975,
+      "exit_code": 0,
+      "prompt_sha256": "98f077656388059d3caab79f55c79e609ed03840a9c0dfadc9f05476f966f6fa",
+      "output_sha256": "987ca8793d85ddbf6a18a9ed619c5ffc98fc33a932c6a36d6c8340966208930c",
+      "simulation": false,
+      "authority": "Local execution evidence only",
+      "session_id": "01a14729-a13a-7900-85c9-4f28bfa62147",
+      "usage": {
+        "input_tokens": 17492,
+        "cached_input_tokens": 0,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 165,
+        "reasoning_output_tokens": 0
+      }
+    },
+    "packet_sha256": "e65d51e93f23cf6c4966139317ea42ba648db002120a15dc3d0d030074753694",
+    "assessments": [
+      {
+        "claim_id": "C1",
+        "supported": true,
+        "reason": "Exact quotation and pinned source binding checked; The excerpt explicitly defines idempotence by intended server effect and identifies PUT, DELETE, and safe methods as idempotent."
+      },
+      {
+        "claim_id": "C2",
+        "supported": true,
+        "reason": "Exact quotation and pinned source binding checked; The excerpt explicitly allows automatic repetition when communication fails before the client can read the response."
+      },
+      {
+        "claim_id": "C3",
+        "supported": true,
+        "reason": "Exact quotation and pinned source binding checked; The excerpt states SHOULD NOT and preserves both exceptions: known idempotent semantics or detection that the original request was never applied."
+      },
+      {
+        "claim_id": "C4",
+        "supported": true,
+        "reason": "Exact quotation and pinned source binding checked; The excerpt explicitly states the proxy MUST NOT restriction and the client SHOULD NOT restriction on retrying a failed automatic retry."
+      }
+    ],
+    "recommendations_supported": true,
+    "scope": "Source support only. No independent factual corroboration, authenticity attestation, or Memory authorization."
+  },
+  "source_supported_claims": 4,
+  "memory_candidate_status": "PENDING_OWNER_REVIEW",
+  "memory_promotion": {
+    "status": "BLOCKED",
+    "external_call_attempted": false,
+    "cli_exit_code": 2,
+    "candidate_preserved": true
+  },
+  "automatic_question_discovery": {
+    "job_id": "research-62106066ee3449df8c553f685fac54a0",
+    "status": "completed",
+    "provider": "deterministic extractive; no model call",
+    "discovery": {
+      "provider": "Wikipedia public search",
+      "sources": [
+        "https://en.wikipedia.org/wiki/Idempotence",
+        "https://en.wikipedia.org/wiki/List_of_HTTP_status_codes"
+      ],
+      "limitation": "Limited public search; Wikipedia is a starting point, not independent corroboration."
+    },
+    "report_path": "/Users/haydensnyder/Git/alfred-research-intelligence/data/research-v1/research-62106066ee3449df8c553f685fac54a0/report.md"
+  },
+  "services_observed": {
+    "alfred-photon.service": "active/running",
+    "alfred-hermes.service": "active/running",
+    "alfred-memory-v1.service": "active/running"
+  },
+  "production_changes": false,
+  "limitations": [
+    "Verification is independent source-support review, not external factual corroboration or authenticated Memory attestation.",
+    "Local provider metadata is execution evidence, not an authoritative receipt.",
+    "Memory promotion and Hermes host registration are not installed or activated."
+  ],
+  "validation": {
+    "command": "python3 -W ignore::ResourceWarning -m unittest discover -s tests -q",
+    "passed": 369,
+    "failed": 0,
+    "existing_tests": 347,
+    "new_local_tests": 22,
+    "runtime_seconds": 42.791,
+    "note": "Baseline emits ResourceWarning for existing unclosed SQLite connections; warnings suppressed in final regression run."
+  }
+}
