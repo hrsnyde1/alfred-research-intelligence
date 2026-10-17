@@ -5,7 +5,7 @@ import re
 import zipfile
 from xml.etree import ElementTree
 
-from .sources import (BINARY_MAX_BYTES, TEXT_SUFFIXES, Extraction, SourceHandler,
+from .sources import (BINARY_MAX_BYTES, HTML_MAX_BYTES, TEXT_SUFFIXES, Extraction, SourceHandler,
                       UnsupportedSource, legacy_text_extract, text_evidence)
 
 
@@ -143,7 +143,7 @@ def article_blocks(html):
 
 
 class ArticleHandler(SourceHandler):
-    name, kind, suffixes = 'article', 'article', ('.html', '.htm')
+    name, kind, suffixes, max_bytes = 'article', 'article', ('.html', '.htm'), HTML_MAX_BYTES
 
     def extract(self, data, filename):
         html, note = decode_html(data)
