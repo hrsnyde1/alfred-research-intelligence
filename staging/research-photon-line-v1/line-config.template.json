@@ -6,6 +6,11 @@
   "binding": {"line": "<RESEARCH_LINE_PHONE_LABEL>", "space": "<RESEARCH_CONVERSATION_SPACE_ID>", "sender": "<OWNER_SENDER_ID>"},
   "provider": "extractive",
   "poll_seconds": 3,
+  "claude": {
+    "api_key_file": "${CREDENTIALS_DIRECTORY}/anthropic-api-key",
+    "research_model": "claude-sonnet-5-5",
+    "synthesis_model": "claude-opus-5-5"
+  },
   "memory": {
     "enabled": false,
     "url": "http://127.0.0.1:<MEMORY_PORT>/v1/memory",

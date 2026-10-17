@@ -17,13 +17,14 @@ def main(argv=None):
     submit.add_argument('--question', help='Objective for submitted URL/document/article')
     submit.add_argument('--source', action='append', default=[], help='Supporting URL or file; at most four')
     submit.add_argument('--text', help='Owner-supplied article text')
-    submit.add_argument('--provider', choices=['auto', 'codex', 'extractive'], default='auto')
+    submit.add_argument('--provider', choices=['auto', 'claude', 'codex', 'extractive'], default='auto')
     submit.add_argument('--request-key', help='Idempotency key for host/CLI submission')
     submit.add_argument('--run', action='store_true', help='Execute now instead of leaving queued')
     for name in ('run', 'recover', 'show', 'report', 'candidate', 'promote'):
         command = commands.add_parser(name)
         command.add_argument('job_id')
     commands.add_parser('list')
+    commands.add_parser('provider-status', help='Check Claude provider configuration (no API call)')
     args = parser.parse_args(argv)
     try:
         engine = ResearchEngine(args.data)
@@ -45,6 +46,8 @@ def main(argv=None):
             return 0 if job['status'] == 'completed' else 2
         elif args.command == 'recover':
             print(json.dumps(summary(engine.recover(args.job_id)), indent=2))
+        elif args.command == 'provider-status':
+            print(json.dumps(engine.claude_status(), indent=2))
         elif args.command == 'list':
             print(json.dumps(engine.store.list(), indent=2))
         else:
