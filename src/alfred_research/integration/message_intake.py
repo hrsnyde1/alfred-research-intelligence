@@ -88,11 +88,14 @@ def objective_from(text, links, kind):
     return remainder[:2000]
 
 
-def detect(text, attachments=(), attachment_roots=()):
+def detect(text, attachments=(), attachment_roots=(), *, dedicated=False):
     """Return a ResearchIntent, or None to leave the message to normal chat.
 
     ``attachments`` are host-supplied dicts with a local ``path``; they are
     accepted only beneath an explicitly configured ``attachment_roots`` entry.
+    ``dedicated`` is for a Research-only line: every message is a research
+    request, so operational wording is not filtered and plain text of at least
+    three words becomes a question.
     """
     if not isinstance(text, str):
         text = ''
@@ -129,12 +132,18 @@ def detect(text, attachments=(), attachment_roots=()):
     explicit = bool(RESEARCH_CUE.search(text))
     operational = bool(OPERATIONAL_CUE.search(URL.sub(' ', text)))
     if not sources:
+        if dedicated and not raw_links:
+            command = COMMAND.match(GREETING.sub('', text, count=1))
+            question = ' '.join((command.group(1) if command else GREETING.sub('', text, count=1)).split())
+            if len(re.findall(r'[A-Za-z0-9]{2,}', question)) >= 3:
+                return ResearchIntent([], question[:2000], question_only=True, rerun=bool(RERUN_CUE.search(text)), notes=notes)
+            return None
         command = COMMAND.match(GREETING.sub('', text, count=1)) if not raw_links else None
         if command and not operational and not attachments:
             return ResearchIntent([], ' '.join(command.group(1).split())[:2000], question_only=True,
                                   rerun=bool(RERUN_CUE.search(text)), notes=notes)
         return None
-    if operational and not explicit:
+    if operational and not explicit and not dedicated:
         return None
     if len(sources) > MAX_SOURCES:
         notes.append('Only the first ' + str(MAX_SOURCES) + ' sources were submitted; ' +

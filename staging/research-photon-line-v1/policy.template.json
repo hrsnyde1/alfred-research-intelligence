@@ -1,0 +1,1 @@
+{"role":"research","enabled":false,"intake_enabled":false,"outbox_enabled":true,"project_id":"<RESEARCH_PROJECT_ID>","line":"<RESEARCH_LINE_PHONE_LABEL>","space":"<RESEARCH_CONVERSATION_SPACE_ID>","sender":"<OWNER_SENDER_ID>","profile":"research","connection_ref":"research-connection-v1","state_dir":"/var/lib/alfredresearch-photon"}
