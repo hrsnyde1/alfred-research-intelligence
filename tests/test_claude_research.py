@@ -200,9 +200,11 @@ class ClaudeResearchTests(unittest.TestCase):
         class Publisher:
             def __init__(self):
                 self.calls = []
+                self.topics = []
 
-            def publish(self, job_id, candidate):
+            def publish(self, job_id, candidate, topic=None):
                 self.calls.append(job_id)
+                self.topics.append(topic)
                 return {'status': 'pending_review', 'receipts': [{'review_state': 'pending'}]}
         publisher = Publisher()
         desk = ResearchDesk(self.root / 'desk', runner='inline', publisher=publisher,
@@ -210,6 +212,7 @@ class ClaudeResearchTests(unittest.TestCase):
         job = desk.engine.run(desk.engine.submit('Summarize obligations', [str(self.source)], provider='claude'))
         desk.publish(job)
         self.assertEqual(publisher.calls, [job['id']])
+        self.assertEqual(publisher.topics, ['General'])
 
     # -------------------------------------------------------- citations
 
